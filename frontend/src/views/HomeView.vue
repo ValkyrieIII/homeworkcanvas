@@ -1,0 +1,103 @@
+<script setup lang="ts">
+import { onMounted, ref } from "vue";
+import { api } from "../api";
+import { arrayOrEmpty, type Assignment, type Meeting } from "../types";
+import AssignmentCard from "../components/AssignmentCard.vue";
+import LoadState from "../components/LoadState.vue";
+const upcoming = ref<Assignment[]>([]),
+    overdue = ref<Assignment[]>([]),
+    undated = ref<Assignment[]>([]),
+    schedule = ref<Meeting[]>([]),
+    loading = ref(false),
+    error = ref("");
+async function load() {
+    loading.value = true;
+    error.value = "";
+    try {
+        const [u, o, d, s] = await Promise.all([
+            api<{ data: Assignment[] | null }>(
+                "/me/assignments?bucket=upcoming",
+            ),
+            api<{ data: Assignment[] | null }>(
+                "/me/assignments?bucket=overdue",
+            ),
+            api<{ data: Assignment[] | null }>(
+                "/me/assignments?bucket=undated",
+            ),
+            api<{ data: Meeting[] | null }>("/me/schedule"),
+        ]);
+        upcoming.value = arrayOrEmpty(u.data);
+        overdue.value = arrayOrEmpty(o.data);
+        undated.value = arrayOrEmpty(d.data);
+        schedule.value = arrayOrEmpty(s.data);
+    } catch (e: any) {
+        error.value = e.message;
+    } finally {
+        loading.value = false;
+    }
+}
+async function toggle(a: Assignment) {
+    await api(`/assignments/${a.id}/my-state`, {
+        method: "PUT",
+        body: JSON.stringify({
+            personal_due_at: a.personal_due_at,
+            completion_status:
+                a.completion_status === "completed" ? "todo" : "completed",
+        }),
+    });
+    await load();
+}
+onMounted(load);
+</script>
+<template>
+    <section>
+        <p class="eyebrow">首页</p>
+        <h1>最近要做什么、什么时候上课</h1>
+        <LoadState
+            :loading="loading"
+            :error="error"
+            :empty="false"
+            empty-text=""
+        /><template v-if="!loading && !error"
+            ><h2>临近个人 DDL</h2>
+            <AssignmentCard
+                v-for="a in upcoming"
+                :key="a.id"
+                :assignment="a"
+                @toggle="toggle"
+            />
+            <p v-if="!upcoming.length" class="empty">暂无即将截止的作业。</p>
+            <h2>官方已逾期</h2>
+            <AssignmentCard
+                v-for="a in overdue"
+                :key="a.id"
+                :assignment="a"
+                @toggle="toggle"
+            />
+            <p v-if="!overdue.length" class="empty">暂无官方逾期作业。</p>
+            <h2>今天/最近课表</h2>
+            <article
+                v-for="m in schedule"
+                :key="`${m.course_instance_id}-${m.weekday}-${m.start_time}`"
+                class="card"
+            >
+                <h3>{{ m.course_name }}</h3>
+                <p>
+                    周{{ m.weekday }} {{ m.start_time }}–{{ m.end_time }}
+                    {{ m.location || "" }}
+                </p>
+            </article>
+            <p v-if="!schedule.length" class="empty">暂无课程安排。</p>
+            <h2>截止时间待确认</h2>
+            <AssignmentCard
+                v-for="a in undated"
+                :key="a.id"
+                :assignment="a"
+                @toggle="toggle"
+            />
+            <p v-if="!undated.length" class="empty">
+                暂无待确认作业。
+            </p></template
+        >
+    </section>
+</template>
