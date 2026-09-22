@@ -106,20 +106,20 @@ type IngestionJob struct {
 }
 type AssignmentCandidate struct {
 	Base
-	SourceItemID     uuid.UUID `gorm:"type:uuid;not null;uniqueIndex:ux_candidate_ordinal"`
-	Ordinal          int       `gorm:"not null;uniqueIndex:ux_candidate_ordinal"`
-	Title            string    `gorm:"not null"`
-	Description      string    `gorm:"not null;default:''"`
-	OfficialDueAt    *time.Time
-	RawDueExpression *string
-	SubmissionMethod *string
-	Evidence         string     `gorm:"type:jsonb;not null;default:'[]'"`
-	FieldConfidence  string     `gorm:"type:jsonb;not null;default:'{}'"`
-	UncertainFields  string     `gorm:"type:jsonb;not null;default:'[]'"`
-	ReviewStatus     string     `gorm:"not null;default:pending"`
-	ReviewedBy       *uuid.UUID `gorm:"type:uuid"`
-	ReviewedAt       *time.Time
-	ReviewNote       *string
+	SourceItemID     uuid.UUID  `gorm:"type:uuid;not null;uniqueIndex:ux_candidate_ordinal" json:"source_item_id"`
+	Ordinal          int        `gorm:"not null;uniqueIndex:ux_candidate_ordinal" json:"ordinal"`
+	Title            string     `gorm:"not null" json:"title"`
+	Description      string     `gorm:"not null;default:''" json:"description"`
+	OfficialDueAt    *time.Time `json:"official_due_at"`
+	RawDueExpression *string    `json:"raw_due_expression"`
+	SubmissionMethod *string    `json:"submission_method"`
+	Evidence         string     `gorm:"type:jsonb;not null;default:'[]'" json:"evidence"`
+	FieldConfidence  string     `gorm:"type:jsonb;not null;default:'{}'" json:"field_confidence"`
+	UncertainFields  string     `gorm:"type:jsonb;not null;default:'[]'" json:"uncertain_fields"`
+	ReviewStatus     string     `gorm:"not null;default:pending" json:"review_status"`
+	ReviewedBy       *uuid.UUID `gorm:"type:uuid" json:"reviewed_by"`
+	ReviewedAt       *time.Time `json:"reviewed_at"`
+	ReviewNote       *string    `json:"review_note"`
 }
 type Notification struct {
 	Base

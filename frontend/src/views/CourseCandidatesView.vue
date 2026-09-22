@@ -4,11 +4,11 @@ import { api } from "../api";
 import { arrayOrEmpty, formatDate } from "../types";
 type Candidate = {
     id: string;
-    Title: string;
-    Description: string;
-    OfficialDueAt: string | null;
-    SubmissionMethod: string | null;
-    UncertainFields: string;
+    title: string;
+    description: string;
+    official_due_at: string | null;
+    submission_method: string | null;
+    uncertain_fields: string;
 };
 const props = defineProps<{ courseId: string }>(),
     items = ref<Candidate[]>([]),
@@ -54,11 +54,11 @@ onMounted(load);
             没有待审核候选。
         </p>
         <article v-for="c in items" :key="c.id" class="card">
-            <h3>{{ c.Title }}</h3>
-            <p>{{ c.Description }}</p>
-            <p>官方截止：{{ formatDate(c.OfficialDueAt) }}</p>
-            <p v-if="c.SubmissionMethod">提交方式：{{ c.SubmissionMethod }}</p>
-            <p class="uncertain">待确认字段：{{ c.UncertainFields }}</p>
+            <h3>{{ c.title }}</h3>
+            <p>{{ c.description }}</p>
+            <p>官方截止：{{ formatDate(c.official_due_at) }}</p>
+            <p v-if="c.submission_method">提交方式：{{ c.submission_method }}</p>
+            <p class="uncertain">待确认字段：{{ c.uncertain_fields }}</p>
             <button @click="review(c.id, true)">确认发布</button
             ><button class="secondary" @click="review(c.id, false)">
                 拒绝
