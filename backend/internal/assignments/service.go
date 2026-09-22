@@ -42,6 +42,25 @@ func (s Service) CreateManual(ctx context.Context, u, ci uuid.UUID, in CreateInp
 	return a, e
 }
 
+// UpdatePublished 修改已发布作业的共享字段，仅允许课程维护者执行。
+func (s Service) UpdatePublished(ctx context.Context, u, aid uuid.UUID, in CreateInput) (shared.Assignment, error) {
+	var assignment shared.Assignment
+	if err := s.DB.WithContext(ctx).First(&assignment, "id=?", aid).Error; err != nil {
+		return assignment, shared.JSONError("assignments.not_found", "作业不存在", 404)
+	}
+	if err := s.Membership.RequireMaintainer(ctx, u, assignment.CourseInstanceID); err != nil {
+		return assignment, err
+	}
+	if in.Title == "" {
+		return assignment, shared.JSONError("assignments.invalid_input", "作业标题不能为空", 400)
+	}
+	assignment.Title = in.Title
+	assignment.Description = in.Description
+	assignment.OfficialDueAt = in.OfficialDueAt
+	assignment.SubmissionMethod = in.SubmissionMethod
+	return assignment, s.DB.WithContext(ctx).Save(&assignment).Error
+}
+
 type MineItem struct {
 	ID               uuid.UUID  `json:"id"`
 	CourseInstanceID uuid.UUID  `json:"course_instance_id"`

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"mime/multipart"
 	"os"
 	"path/filepath"
@@ -22,6 +23,13 @@ import (
 )
 
 const maxUploadBytes int64 = 25 << 20
+
+// 送进单次抽取的字符预算。按模型上下文 64K token 量级留出余量，
+// 没有这层闸时一份上百页的课件会必现 context_length_exceeded。
+const (
+	maxPromptChars = 40000
+	maxPageChars   = 12000
+)
 
 type Evidence struct {
 	PageNumber  int    `json:"page_number"`
@@ -42,11 +50,11 @@ type Page struct {
 	PreviewPath string
 }
 type ExtractionInput struct {
-	CourseTimezone string
-	Pages          []Page
+	CurrentDate string
+	Pages       []Page
 }
 
-// Extractor is independent of HTTP and document formats. Production calls the platform relay.
+// Extractor 与 HTTP 和文档格式解耦，生产环境通过模型中转服务调用。
 type Extractor interface {
 	Extract(context.Context, ExtractionInput) ([]Extracted, error)
 }
@@ -104,7 +112,9 @@ func (s Service) CreateTextSource(ctx context.Context, u, ci uuid.UUID, text str
 	if e := s.createSourceAndJob(ctx, &src, &job); e != nil {
 		return src, job, e
 	}
-	s.enqueue(&job)
+	if e := s.enqueue(&job); e != nil {
+		return src, job, s.enqueueFailed(&job, e)
+	}
 	return src, job, nil
 }
 
@@ -156,7 +166,9 @@ func (s Service) CreateFileSource(ctx context.Context, u, ci uuid.UUID, file *mu
 		_ = s.Files.RemoveJob(job.ID)
 		return src, job, e
 	}
-	s.enqueue(&job)
+	if e := s.enqueue(&job); e != nil {
+		return src, job, s.enqueueFailed(&job, e)
+	}
 	return src, job, nil
 }
 func (s Service) createSourceAndJob(ctx context.Context, src *shared.SourceItem, job *shared.IngestionJob) error {
@@ -168,19 +180,26 @@ func (s Service) createSourceAndJob(ctx context.Context, src *shared.SourceItem,
 		return tx.Create(job).Error
 	})
 }
-func (s Service) enqueue(job *shared.IngestionJob) {
+func (s Service) enqueue(job *shared.IngestionJob) error {
 	if s.Queue == nil {
-		return
+		return fmt.Errorf("queue client is not configured")
 	}
 	task, e := shared.NewJobTask(job.ID)
 	if e != nil {
-		return
+		return e
 	}
 	info, e := s.Queue.Enqueue(task, asynq.MaxRetry(job.MaxAttempts))
-	if e == nil {
-		_ = s.DB.Model(job).Update("queue_task_id", info.ID)
-		job.QueueTaskID = &info.ID
+	if e != nil {
+		return e
 	}
+	_ = s.DB.Model(job).Update("queue_task_id", info.ID)
+	job.QueueTaskID = &info.ID
+	return nil
+}
+
+// 投递失败时任务不能停在 queued 等一个永远不会来的执行，落成 failed 让调用方和前端立刻看到原因。
+func (s Service) enqueueFailed(job *shared.IngestionJob, cause error) error {
+	return s.fail(job, "ingestion.enqueue_failed", "任务投递失败："+truncateOneLine(cause.Error(), 200))
 }
 
 func (s Service) Process(ctx context.Context, jid uuid.UUID) error {
@@ -192,7 +211,10 @@ func (s Service) Process(ctx context.Context, jid uuid.UUID) error {
 		return nil
 	}
 	now := time.Now()
-	_ = s.DB.Model(&job).Updates(map[string]any{"stage": "parsing", "status": "processing", "attempts": job.Attempts + 1, "started_at": &now}).Error
+	// 显式记账，不依赖 GORM 把 map 里的值回写进 job —— 它确实会回写（update.go 的 assignValue），
+	// 但那是副作用，一旦这里改成 gorm.Expr 就会静默失效，重试次数跟着错一轮。
+	job.Attempts++
+	_ = s.DB.Model(&job).Updates(map[string]any{"stage": "parsing", "status": "processing", "attempts": job.Attempts, "started_at": &now}).Error
 	var src shared.SourceItem
 	if e := s.DB.WithContext(ctx).First(&src, "id=?", job.SourceItemID).Error; e != nil {
 		return s.fail(&job, "ingestion.source_missing", "来源记录不存在")
@@ -219,9 +241,13 @@ func (s Service) Process(ctx context.Context, jid uuid.UUID) error {
 		return s.fail(&job, "ingestion.no_assignment_page", "未发现疑似作业页面，请重新上传或改用文字导入")
 	}
 	_ = s.DB.Model(&job).Update("stage", "extracting")
-	items, e := s.Extractor.Extract(ctx, ExtractionInput{CourseTimezone: courseInstance.Timezone, Pages: pages})
+	bounded, trimmed := boundPages(pages)
+	if trimmed > 0 {
+		log.Printf("ingestion prompt trimmed job_id=%s trimmed_pages=%d located_pages=%d", job.ID, trimmed, len(pages))
+	}
+	items, e := s.Extractor.Extract(ctx, ExtractionInput{CurrentDate: chinaToday(), Pages: bounded})
 	if e != nil {
-		return s.retryOrFail(&job, "extracting", "ingestion.ai_unavailable", "暂时无法抽取作业候选")
+		return s.retryOrFail(&job, "extracting", "ingestion.ai_unavailable", "暂时无法抽取作业候选："+truncateOneLine(e.Error(), 300))
 	}
 	_ = s.DB.Model(&job).Update("stage", "validating")
 	if len(items) == 0 || validate(items, pages) != nil {
@@ -252,6 +278,34 @@ func (s Service) Process(ctx context.Context, jid uuid.UUID) error {
 	_ = s.DB.Model(&src).Update("status", "review_ready")
 	return nil
 }
+
+// boundPages 把定位结果压进 prompt 预算：先按单页上限截断，再在总量用尽后丢弃尾部页面。
+// 返回值是被截断或丢弃的页数。校验仍用未截断的原文，因为被截断部分只是前缀，
+// 证据片段照样能对上；模型看不到的页面也不会产出候选。
+func boundPages(pages []Page) ([]Page, int) {
+	out := make([]Page, 0, len(pages))
+	budget, trimmed := maxPromptChars, 0
+	for _, p := range pages {
+		if budget <= 0 {
+			trimmed++
+			continue
+		}
+		r, cut := []rune(p.Text), false
+		if len(r) > maxPageChars {
+			r, cut = r[:maxPageChars], true
+		}
+		if len(r) > budget {
+			r, cut = r[:budget], true
+		}
+		if cut {
+			trimmed++
+		}
+		budget -= len(r)
+		out = append(out, Page{Number: p.Number, Text: string(r)})
+	}
+	return out, trimmed
+}
+
 func (s Service) parse(ctx context.Context, job *shared.IngestionJob, src *shared.SourceItem) ([]Page, error) {
 	if src.SourceType == "text" && src.RawText != nil {
 		return []Page{{Number: 1, Text: *src.RawText}}, nil
@@ -267,6 +321,9 @@ func (s Service) parse(ctx context.Context, job *shared.IngestionJob, src *share
 }
 func (s Service) fail(j *shared.IngestionJob, code, msg string) error {
 	now := time.Now()
+	log.Printf("ingestion failed job_id=%s source_id=%s stage=%s attempts=%d code=%s message=%s", j.ID, j.SourceItemID, j.Stage, j.Attempts, code, msg)
+	// 内存里的 job 也要同步，创建接口在投递失败时会把它作为响应体返回。
+	j.Stage, j.Status, j.ErrorCode, j.ErrorMessage, j.FinishedAt, j.TemporaryLocator = "failed", "failed", &code, &msg, &now, nil
 	_ = s.Files.RemoveJob(j.ID)
 	if e := s.DB.Model(j).Updates(map[string]any{"stage": "failed", "status": "failed", "error_code": code, "error_message": msg, "finished_at": &now, "temporary_locator": nil}).Error; e != nil {
 		return e
@@ -274,9 +331,11 @@ func (s Service) fail(j *shared.IngestionJob, code, msg string) error {
 	return s.DB.Model(&shared.SourceItem{}).Where("id=?", j.SourceItemID).Update("status", "failed").Error
 }
 func (s Service) retryOrFail(j *shared.IngestionJob, stage, code, msg string) error {
-	if j.Attempts+1 >= j.MaxAttempts {
+	// j.Attempts 是含本次在内的执行次数，Process 里已经记过账，这里不要再加一。
+	if j.Attempts >= j.MaxAttempts {
 		return s.fail(j, code, msg)
 	}
+	log.Printf("ingestion retry job_id=%s source_id=%s stage=%s attempt=%d/%d code=%s message=%s", j.ID, j.SourceItemID, stage, j.Attempts, j.MaxAttempts, code, msg)
 	if e := s.DB.Model(j).Updates(map[string]any{"stage": stage, "status": "queued", "error_code": code, "error_message": msg}).Error; e != nil {
 		return e
 	}
@@ -300,7 +359,7 @@ func validate(items []Extracted, pages []Page) error {
 	return nil
 }
 
-// RuleExtractor is a development fallback. It only receives located pages and never publishes assignments.
+// RuleExtractor 是开发环境的兜底实现，只接收定位后的页面，不会直接发布作业。
 type RuleExtractor struct{}
 
 func (RuleExtractor) Extract(_ context.Context, in ExtractionInput) ([]Extracted, error) {

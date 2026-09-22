@@ -15,6 +15,7 @@ import (
 )
 
 func main() {
+	_ = shared.LoadDotEnv(".env")
 	db, e := shared.OpenDatabase()
 	if e != nil {
 		panic(e)
@@ -154,6 +155,20 @@ func main() {
 		}
 		v, e := as.CreateManual(c, identity.Current(c).ID, ci, x)
 		respond(c, v, e, 201)
+	})
+	api.PATCH("/assignments/:id", func(c *gin.Context) {
+		aid, e := id(c)
+		if e != nil {
+			bad(c)
+			return
+		}
+		var x assignments.CreateInput
+		if c.ShouldBindJSON(&x) != nil {
+			bad(c)
+			return
+		}
+		v, e := as.UpdatePublished(c, identity.Current(c).ID, aid, x)
+		respond(c, v, e, 200)
 	})
 	api.PUT("/assignments/:id/my-state", func(c *gin.Context) {
 		aid, e := id(c)
