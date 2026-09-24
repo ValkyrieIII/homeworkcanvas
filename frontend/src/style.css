@@ -237,7 +237,74 @@ h3 {
     color: #718096;
 }
 .assignment-card {
-    border-left: 3px solid #6b9bd2;
+    --assignment-tone: #3975ad;
+    --assignment-tint: #eef5fc;
+    border-left: 4px solid var(--assignment-tone);
+}
+.assignment-card--soon {
+    --assignment-tone: #a8640d;
+    --assignment-tint: #fff4de;
+}
+.assignment-card--urgent,
+.assignment-card--overdue {
+    --assignment-tone: #b42318;
+    --assignment-tint: #fff0ed;
+}
+.assignment-card--completed {
+    --assignment-tone: #067647;
+    --assignment-tint: #e9f8ef;
+}
+.assignment-card--undated {
+    --assignment-tone: #667085;
+    --assignment-tint: #f2f4f7;
+}
+.assignment-card__top,
+.assignment-card__actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+.assignment-card__badge {
+    padding: 4px 9px;
+    border-radius: 999px;
+    background: var(--assignment-tint);
+    color: var(--assignment-tone);
+    font-size: 12px;
+    font-weight: 700;
+}
+.assignment-card__description {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    overflow: hidden;
+    white-space: pre-line;
+    overflow-wrap: anywhere;
+}
+.assignment-card__details {
+    margin: 12px 0;
+    padding-top: 10px;
+    border-top: 1px solid #edf0f3;
+}
+.assignment-card__details p {
+    overflow-wrap: anywhere;
+}
+.assignment-card__actions {
+    justify-content: flex-start;
+}
+.assignment-card__actions a {
+    color: #1f5ea8;
+    font-size: 13px;
+    font-weight: 700;
+    text-decoration: none;
+}
+.assignment-card__actions a:hover,
+.assignment-card__actions a:focus-visible {
+    text-decoration: underline;
+}
+.assignment-card__actions button {
+    margin: 0;
 }
 .assignment-card p {
     margin: 7px 0;

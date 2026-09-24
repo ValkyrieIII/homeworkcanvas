@@ -6,6 +6,7 @@ export type Assignment = {
   title: string;
   description: string;
   official_due_at: string | null;
+  submission_method: string | null;
   personal_due_at: string | null;
   effective_due_at: string | null;
   completion_status: "todo" | "completed";

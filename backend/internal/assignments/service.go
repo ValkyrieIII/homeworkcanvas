@@ -71,6 +71,7 @@ type MineItem struct {
 	Title            string     `json:"title"`
 	Description      string     `json:"description"`
 	OfficialDueAt    *time.Time `json:"official_due_at"`
+	SubmissionMethod *string    `json:"submission_method"`
 	PersonalDueAt    *time.Time `json:"personal_due_at"`
 	EffectiveDueAt   *time.Time `json:"effective_due_at"`
 	CompletionStatus string     `json:"completion_status"`
@@ -78,7 +79,19 @@ type MineItem struct {
 }
 
 func (s Service) ListMine(ctx context.Context, u uuid.UUID, bucket string) ([]MineItem, error) {
-	q := s.DB.WithContext(ctx).Table("assignments a").Select("a.id,a.course_instance_id,c.name course_name,ci.term,a.title,a.description,a.official_due_at,aus.personal_due_at,COALESCE(aus.personal_due_at,a.official_due_at) effective_due_at,COALESCE(aus.completion_status,'todo') completion_status,a.status").Joins("JOIN course_instances ci ON ci.id=a.course_instance_id").Joins("JOIN courses c ON c.id=ci.course_id").Joins("JOIN enrollments e ON e.course_instance_id=ci.id").Joins("LEFT JOIN assignment_user_states aus ON aus.assignment_id=a.id AND aus.user_id=?", u).Where("e.user_id=? AND e.status='active' AND a.status='published'", u)
+	q := s.DB.WithContext(ctx).Table("assignments a").Select(`
+		a.id, a.course_instance_id, c.name course_name, ci.term,
+		a.title, a.description, a.official_due_at, a.submission_method,
+		aus.personal_due_at,
+		COALESCE(aus.personal_due_at, a.official_due_at) effective_due_at,
+		COALESCE(aus.completion_status, 'todo') completion_status,
+		a.status
+	`)
+	q = q.Joins("JOIN course_instances ci ON ci.id=a.course_instance_id")
+	q = q.Joins("JOIN courses c ON c.id=ci.course_id")
+	q = q.Joins("JOIN enrollments e ON e.course_instance_id=ci.id")
+	q = q.Joins("LEFT JOIN assignment_user_states aus ON aus.assignment_id=a.id AND aus.user_id=?", u)
+	q = q.Where("e.user_id=? AND e.status='active' AND a.status='published'", u)
 	switch bucket {
 	case "overdue":
 		q = q.Where("a.official_due_at < NOW()")
