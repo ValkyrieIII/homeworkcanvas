@@ -10,6 +10,7 @@ type Job = {
 const props = defineProps<{ courseId: string }>();
 const text = ref(""),
     file = ref<File | null>(null),
+    fileInput = ref<HTMLInputElement | null>(null),
     message = ref(""),
     error = ref(""),
     sending = ref(false),
@@ -38,39 +39,33 @@ function watchJob(value: Job) {
     timer = window.setInterval(refreshJob, 1800);
     void refreshJob();
 }
-async function submitText() {
-    if (!text.value.trim()) return;
+async function submit() {
+    if (!text.value.trim() && !file.value) return;
     sending.value = true;
     message.value = "";
     error.value = "";
     try {
-        const r = await api<any>(
-            `/course-instances/${props.courseId}/sources/text`,
-            { method: "POST", body: JSON.stringify({ text: text.value }) },
-        );
+        let r: { job: Job; reused?: boolean };
+        if (file.value) {
+            const body = new FormData();
+            body.append("file", file.value);
+            body.append("text", text.value.trim());
+            r = await api<{ job: Job; reused: boolean }>(
+                `/course-instances/${props.courseId}/sources/file`,
+                { method: "POST", body },
+            );
+        } else {
+            r = await api<{ job: Job }>(
+                `/course-instances/${props.courseId}/sources/text`,
+                { method: "POST", body: JSON.stringify({ text: text.value.trim() }) },
+            );
+        }
         text.value = "";
-        message.value = "已创建文字处理任务。";
-        watchJob(r.job);
-    } catch (e: any) {
-        error.value = e.message;
-    } finally {
-        sending.value = false;
-    }
-}
-async function submitFile() {
-    if (!file.value) return;
-    sending.value = true;
-    message.value = "";
-    error.value = "";
-    try {
-        const body = new FormData();
-        body.append("file", file.value);
-        const r = await api<any>(
-            `/course-instances/${props.courseId}/sources/file`,
-            { method: "POST", body },
-        );
         file.value = null;
-        message.value = "文件已进入处理队列，原件只会在处理期间临时保留。";
+        if (fileInput.value) fileInput.value.value = "";
+        message.value = r.reused
+            ? "这组文字和附件此前已导入，已显示原有处理结果。"
+            : "已提交一条导入任务，文字和附件会一起交给解析流程。";
         watchJob(r.job);
     } catch (e: any) {
         error.value = e.message;
@@ -87,26 +82,26 @@ onUnmounted(stopPolling);
         <p v-if="error" class="error">{{ error }}</p>
         <p v-if="message" class="notice">{{ message }}</p>
         <section class="card">
-            <h3>老师文字消息</h3>
+            <h3>导入老师通知</h3>
+            <p>可填写文字、选择附件，或两者一起提交。附件支持 PDF / PPT / PPTX，单个不超过 25MB。</p>
+            <label for="source-message">通知文字</label>
             <textarea
+                id="source-message"
                 v-model="text"
                 placeholder="例如：下周三前提交实验一报告，发到课程平台。"
-            /><button :disabled="sending || !text.trim()" @click="submitText">
-                {{ sending ? "正在提交…" : "提交文字" }}
-            </button>
-        </section>
-        <section class="card">
-            <h3>PDF / PPT / PPTX</h3>
-            <p>单个文件不超过 25MB。</p>
+            />
+            <label for="source-file">附件（可选）</label>
             <input
+                id="source-file"
+                ref="fileInput"
                 type="file"
                 accept=".pdf,.ppt,.pptx"
                 @change="
                     file =
                         ($event.target as HTMLInputElement).files?.[0] ?? null
                 "
-            /><button :disabled="sending || !file" @click="submitFile">
-                {{ sending ? "正在上传…" : "上传并处理" }}
+            /><button :disabled="sending || (!file && !text.trim())" @click="submit">
+                {{ sending ? "正在提交…" : "导入并生成候选" }}
             </button>
         </section>
         <section v-if="job" class="card job-card">

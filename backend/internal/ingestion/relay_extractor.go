@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"slices"
@@ -96,7 +96,7 @@ func (e OpenAICompatibleExtractor) Extract(ctx context.Context, input Extraction
 	if err != nil {
 		return nil, err
 	}
-	prompt := "从给定课程页面中抽取作业候选。当前日期是 " + input.CurrentDate +
+	prompt := "从给定课程消息和文档页面中抽取作业候选。页码 0 是老师随附件发送的文字消息，其他页码来自附件；两者属于同一条通知，必须结合理解。当前日期是 " + input.CurrentDate +
 		"（时区固定 UTC+8）。截止时间写成 UTC+8 的 RFC3339（如 2026-10-01T23:59:00+08:00）；" +
 		"页面只给月日没给年份时按当前日期推最近的年份，不要猜成去年。" +
 		"只返回 JSON：{\"candidates\":[{\"title\":string," +
@@ -176,7 +176,7 @@ func candidatesFromContent(content, currentDate string) ([]Extracted, error) {
 		var c relayCandidate
 		// 逐条解码：某条候选的字段类型不对时只丢这一条，不让整批陪葬。
 		if err := json.Unmarshal(raw, &c); err != nil {
-			log.Printf("ingestion candidate skipped: %v", err)
+			slog.Warn("ingestion_candidate_skipped", "error_type", fmt.Sprintf("%T", err))
 			continue
 		}
 		dueAt := rawText(c.OfficialDueAt)

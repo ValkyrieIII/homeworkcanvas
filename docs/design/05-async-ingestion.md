@@ -17,7 +17,7 @@ flowchart LR
   Review --> Assignment[创建共享 Assignment]
 ```
 
-文件上传只在临时工作目录保留到任务终态或自动重试耗尽。文字消息不需要临时文件。
+文件上传只在临时工作目录保留到任务终态或自动重试耗尽。文字消息不需要临时文件。一次导入可同时包含文字消息和附件，两者共用一个 SourceItem 和 Job；老师消息以页码 0 与附件解析文本一起送入抽取器，供模型交叉理解和引用证据。有文字时不先按附件自身的关键词删页，最终仍受抽取输入字符预算限制。
 
 ## 2. Job 状态机
 
@@ -87,7 +87,7 @@ queued -> parsing -> locating -> extracting -> validating -> review_ready -> com
 | 算力中转超时、MaaS 临时不可用 | 指数退避，最多 `max_attempts` 次 |
 | Worker 崩溃、临时进程异常 | 由 Asynq 重投；从可安全重入的 stage 开始 |
 | 格式不支持、文件损坏、页码/Schema 不合法 | 不重试，标为 failed |
-| 重复 HTTP 上传 | 用 `Idempotency-Key` 返回同一 Source/Job |
+| 同一用户在同一课程重复上传相同文件与相同文字 | 按文件内容和文字组合校验和返回原有 Source/Job；原任务失败后允许重新上传，文字变化则创建新任务 |
 | 同一 Job 重投 | 条件更新 Job 状态；已到 review_ready/completed 的任务直接跳过 |
 | 候选重复写入 | `(source_item_id, ordinal)` 唯一约束和事务替换 |
 | 重复接受候选 | 候选行锁 + `assignments.source_candidate_id` 唯一约束 |

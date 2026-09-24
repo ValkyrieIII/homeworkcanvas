@@ -10,12 +10,15 @@ import (
 	"homeworkcanvas/backend/internal/ingestion"
 	"homeworkcanvas/backend/internal/notifications"
 	"homeworkcanvas/backend/internal/shared"
+	"log"
 	"net/http"
 	"os"
+	"time"
 )
 
 func main() {
 	_ = shared.LoadDotEnv(".env")
+	shared.ConfigureLogging()
 	db, e := shared.OpenDatabase()
 	if e != nil {
 		panic(e)
@@ -26,7 +29,7 @@ func main() {
 	as := assignments.Service{DB: db, Membership: cs, PublishNotification: ns.AssignmentPublished}
 	in := ingestion.Service{DB: db, Membership: cs, Queue: queue, Extractor: ingestion.NewConfiguredExtractor(), Files: shared.NewTemporaryFiles()}
 	r := gin.New()
-	r.Use(gin.Logger(), gin.Recovery(), devCORS())
+	r.Use(shared.RequestLog(), shared.SafeRecovery(), devCORS())
 	r.GET("/healthz", func(c *gin.Context) { c.JSON(200, gin.H{"status": "ok"}) })
 	r.OPTIONS("/*path", func(c *gin.Context) { c.Status(http.StatusNoContent) })
 	api := r.Group("/api/v1")
@@ -211,8 +214,12 @@ func main() {
 			bad(c)
 			return
 		}
-		s, j, e := in.CreateFileSource(c, identity.Current(c).ID, ci, file)
-		respond(c, gin.H{"source": s, "job": j}, e, 202)
+		result, e := in.CreateFileSource(c, identity.Current(c).ID, ci, file, c.PostForm("text"))
+		status := http.StatusAccepted
+		if result.Reused {
+			status = http.StatusOK
+		}
+		respond(c, gin.H{"source": result.Source, "job": result.Job, "reused": result.Reused}, e, status)
 	})
 	api.GET("/ingestion-jobs/:id", func(c *gin.Context) {
 		jid, e := id(c)
@@ -287,7 +294,10 @@ func main() {
 	if addr == "" {
 		addr = ":8080"
 	}
-	_ = http.ListenAndServe(addr, r)
+	srv := &http.Server{Addr: addr, Handler: r, ReadHeaderTimeout: 10 * time.Second}
+	if e := srv.ListenAndServe(); e != nil {
+		log.Fatal(e)
+	}
 }
 
 func devCORS() gin.HandlerFunc {
@@ -295,6 +305,7 @@ func devCORS() gin.HandlerFunc {
 		origin := c.GetHeader("Origin")
 		if origin == "http://127.0.0.1:5173" || origin == "http://localhost:5173" {
 			c.Header("Access-Control-Allow-Origin", origin)
+			c.Header("Access-Control-Expose-Headers", "X-Request-ID")
 			c.Header("Vary", "Origin")
 			c.Header("Access-Control-Allow-Headers", "Content-Type, X-Canvas-Subject, X-Canvas-Name, Idempotency-Key")
 			c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, OPTIONS")

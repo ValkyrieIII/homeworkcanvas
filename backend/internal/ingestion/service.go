@@ -6,8 +6,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"io"
-	"log"
+	"log/slog"
 	"mime/multipart"
 	"os"
 	"path/filepath"
@@ -71,6 +72,12 @@ type ReviewMetrics struct {
 	Rejected int64 `json:"rejected"`
 }
 
+type FileSourceResult struct {
+	Source shared.SourceItem
+	Job    shared.IngestionJob
+	Reused bool
+}
+
 func (s Service) ReviewMetrics(ctx context.Context, userID, courseInstanceID uuid.UUID) (ReviewMetrics, error) {
 	if e := s.Membership.RequireMaintainer(ctx, userID, courseInstanceID); e != nil {
 		return ReviewMetrics{}, e
@@ -118,58 +125,107 @@ func (s Service) CreateTextSource(ctx context.Context, u, ci uuid.UUID, text str
 	return src, job, nil
 }
 
-func (s Service) CreateFileSource(ctx context.Context, u, ci uuid.UUID, file *multipart.FileHeader) (shared.SourceItem, shared.IngestionJob, error) {
+func (s Service) CreateFileSource(ctx context.Context, u, ci uuid.UUID, file *multipart.FileHeader, message string) (FileSourceResult, error) {
 	if e := s.Membership.RequireActiveMember(ctx, u, ci); e != nil {
-		return shared.SourceItem{}, shared.IngestionJob{}, e
+		return FileSourceResult{}, e
 	}
 	if file == nil || file.Size <= 0 || file.Size > maxUploadBytes {
-		return shared.SourceItem{}, shared.IngestionJob{}, shared.JSONError("ingestion.invalid_file", "请选择不超过 25MB 的 PDF、PPT 或 PPTX 文件", 422)
+		return FileSourceResult{}, shared.JSONError("ingestion.invalid_file", "请选择不超过 25MB 的 PDF、PPT 或 PPTX 文件", 422)
 	}
 	ext := strings.ToLower(filepath.Ext(file.Filename))
 	if ext != ".pdf" && ext != ".ppt" && ext != ".pptx" {
-		return shared.SourceItem{}, shared.IngestionJob{}, shared.JSONError("ingestion.unsupported_file", "仅支持 PDF、PPT 和 PPTX 文件", 422)
+		return FileSourceResult{}, shared.JSONError("ingestion.unsupported_file", "仅支持 PDF、PPT 和 PPTX 文件", 422)
 	}
 	name, mime, size := filepath.Base(file.Filename), file.Header.Get("Content-Type"), file.Size
 	src := shared.SourceItem{CourseInstanceID: ci, SubmittedBy: u, SourceType: "file", OriginalFilename: &name, MimeType: &mime, ByteSize: &size, Status: "queued"}
+	message = strings.TrimSpace(message)
+	if message != "" {
+		src.RawText = &message
+	}
 	job := shared.IngestionJob{Base: shared.Base{ID: uuid.New()}, Stage: "queued", Status: "queued", MaxAttempts: 3}
 	dir, e := s.Files.CreateJobDir(job.ID)
 	if e != nil {
-		return src, job, e
+		return FileSourceResult{}, e
 	}
 	path, e := s.Files.SourcePath(job.ID, name)
 	if e != nil {
 		_ = s.Files.RemoveJob(job.ID)
-		return src, job, e
+		return FileSourceResult{}, e
 	}
 	in, e := file.Open()
 	if e != nil {
 		_ = s.Files.RemoveJob(job.ID)
-		return src, job, e
+		return FileSourceResult{}, e
 	}
 	defer in.Close()
 	out, e := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if e != nil {
 		_ = s.Files.RemoveJob(job.ID)
-		return src, job, e
+		return FileSourceResult{}, e
 	}
 	h := sha256.New()
 	_, copyErr := io.Copy(io.MultiWriter(out, h), io.LimitReader(in, maxUploadBytes+1))
 	closeErr := out.Close()
 	if copyErr != nil || closeErr != nil {
 		_ = s.Files.RemoveJob(job.ID)
-		return src, job, fmt.Errorf("save upload: %v %v", copyErr, closeErr)
+		return FileSourceResult{}, fmt.Errorf("save upload: %v %v", copyErr, closeErr)
 	}
-	checksum := hex.EncodeToString(h.Sum(nil))
+	checksum := sourceChecksum(hex.EncodeToString(h.Sum(nil)), message)
 	src.Checksum = &checksum
 	job.TemporaryLocator = &dir
-	if e := s.createSourceAndJob(ctx, &src, &job); e != nil {
-		_ = s.Files.RemoveJob(job.ID)
-		return src, job, e
+	newJobID := job.ID
+	reused, e := s.createOrReuseFileSource(ctx, &src, &job)
+	if e != nil || reused {
+		if cleanupErr := s.Files.RemoveJob(newJobID); cleanupErr != nil {
+			slog.Error("ingestion_cleanup_error", "job_id", newJobID, "error_type", fmt.Sprintf("%T", cleanupErr))
+		}
+		if e != nil {
+			return FileSourceResult{}, e
+		}
+		return FileSourceResult{Source: src, Job: job, Reused: true}, nil
 	}
 	if e := s.enqueue(&job); e != nil {
-		return src, job, s.enqueueFailed(&job, e)
+		return FileSourceResult{Source: src, Job: job}, s.enqueueFailed(&job, e)
 	}
-	return src, job, nil
+	return FileSourceResult{Source: src, Job: job}, nil
+}
+
+// Serializes identical uploads across API processes before checking existing work.
+// Failed jobs are deliberately excluded so a corrected environment can be retried.
+func (s Service) createOrReuseFileSource(ctx context.Context, src *shared.SourceItem, job *shared.IngestionJob) (bool, error) {
+	if src.Checksum == nil {
+		return false, fmt.Errorf("file checksum is required")
+	}
+	h := fnv.New64a()
+	_, _ = h.Write(src.CourseInstanceID[:])
+	_, _ = h.Write(src.SubmittedBy[:])
+	_, _ = h.Write([]byte(*src.Checksum))
+	var reused bool
+	e := s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if e := tx.Exec("SELECT pg_advisory_xact_lock(?)", int64(h.Sum64())).Error; e != nil {
+			return e
+		}
+		var existing shared.SourceItem
+		e := tx.Where("course_instance_id=? AND submitted_by=? AND source_type='file' AND checksum=? AND status<>'failed'", src.CourseInstanceID, src.SubmittedBy, *src.Checksum).
+			Order("created_at ASC, id ASC").First(&existing).Error
+		if e == nil {
+			var existingJob shared.IngestionJob
+			if e := tx.Where("source_item_id=?", existing.ID).First(&existingJob).Error; e != nil {
+				return e
+			}
+			*src, *job, reused = existing, existingJob, true
+			return nil
+		}
+		if e != gorm.ErrRecordNotFound {
+			return e
+		}
+		if e := tx.Create(src).Error; e != nil {
+			return e
+		}
+		job.SourceItemID = src.ID
+		return tx.Create(job).Error
+	})
+	return reused, e
 }
 func (s Service) createSourceAndJob(ctx context.Context, src *shared.SourceItem, job *shared.IngestionJob) error {
 	return s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -203,6 +259,7 @@ func (s Service) enqueueFailed(job *shared.IngestionJob, cause error) error {
 }
 
 func (s Service) Process(ctx context.Context, jid uuid.UUID) error {
+	started := time.Now()
 	var job shared.IngestionJob
 	if e := s.DB.WithContext(ctx).First(&job, "id=?", jid).Error; e != nil {
 		return e
@@ -214,7 +271,11 @@ func (s Service) Process(ctx context.Context, jid uuid.UUID) error {
 	// 显式记账，不依赖 GORM 把 map 里的值回写进 job —— 它确实会回写（update.go 的 assignValue），
 	// 但那是副作用，一旦这里改成 gorm.Expr 就会静默失效，重试次数跟着错一轮。
 	job.Attempts++
-	_ = s.DB.Model(&job).Updates(map[string]any{"stage": "parsing", "status": "processing", "attempts": job.Attempts, "started_at": &now}).Error
+	job.Stage = "parsing"
+	if e := s.DB.WithContext(ctx).Model(&job).Updates(map[string]any{"stage": job.Stage, "status": "processing", "attempts": job.Attempts, "started_at": &now}).Error; e != nil {
+		return e
+	}
+	slog.Info("ingestion_stage", "job_id", job.ID, "source_id", job.SourceItemID, "stage", job.Stage, "attempt", job.Attempts)
 	var src shared.SourceItem
 	if e := s.DB.WithContext(ctx).First(&src, "id=?", job.SourceItemID).Error; e != nil {
 		return s.fail(&job, "ingestion.source_missing", "来源记录不存在")
@@ -223,13 +284,18 @@ func (s Service) Process(ctx context.Context, jid uuid.UUID) error {
 	if e := s.DB.WithContext(ctx).First(&courseInstance, "id=?", src.CourseInstanceID).Error; e != nil {
 		return s.fail(&job, "ingestion.course_missing", "课程不存在")
 	}
-	_ = s.DB.Model(&src).Update("status", "processing")
+	if e := s.DB.WithContext(ctx).Model(&src).Update("status", "processing").Error; e != nil {
+		return e
+	}
 	pages, e := s.parse(ctx, &job, &src)
 	if e != nil {
+		slog.Error("ingestion_parse_error", "job_id", job.ID, "source_id", src.ID, "error_type", fmt.Sprintf("%T", e))
 		return s.fail(&job, "ingestion.parse_failed", "文件无法解析，请检查格式后重新上传")
 	}
-	_ = s.DB.Model(&job).Update("stage", "locating")
-	if src.SourceType == "file" {
+	if e := s.setStage(ctx, &job, "locating", started, len(pages)); e != nil {
+		return e
+	}
+	if src.SourceType == "file" && src.RawText == nil {
 		pages = locate(pages)
 		if len(pages) > 0 {
 			if e := RenderPreviews(ctx, *src.OriginalFilename, *job.TemporaryLocator, pages); e != nil {
@@ -237,19 +303,27 @@ func (s Service) Process(ctx context.Context, jid uuid.UUID) error {
 			}
 		}
 	}
+	// Page zero is the accompanying teacher message. When it exists, keep
+	// the document pages too: the message may contain the only deadline or
+	// assignment signal, so locating the document alone would lose context.
+	pages = withTeacherMessage(src, pages)
 	if len(pages) == 0 {
 		return s.fail(&job, "ingestion.no_assignment_page", "未发现疑似作业页面，请重新上传或改用文字导入")
 	}
-	_ = s.DB.Model(&job).Update("stage", "extracting")
+	if e := s.setStage(ctx, &job, "extracting", started, len(pages)); e != nil {
+		return e
+	}
 	bounded, trimmed := boundPages(pages)
 	if trimmed > 0 {
-		log.Printf("ingestion prompt trimmed job_id=%s trimmed_pages=%d located_pages=%d", job.ID, trimmed, len(pages))
+		slog.Warn("ingestion_prompt_trimmed", "job_id", job.ID, "trimmed_pages", trimmed, "located_pages", len(pages))
 	}
 	items, e := s.Extractor.Extract(ctx, ExtractionInput{CurrentDate: chinaToday(), Pages: bounded})
 	if e != nil {
 		return s.retryOrFail(&job, "extracting", "ingestion.ai_unavailable", "暂时无法抽取作业候选："+truncateOneLine(e.Error(), 300))
 	}
-	_ = s.DB.Model(&job).Update("stage", "validating")
+	if e := s.setStage(ctx, &job, "validating", started, len(bounded)); e != nil {
+		return e
+	}
 	if len(items) == 0 || validate(items, pages) != nil {
 		return s.fail(&job, "ingestion.invalid_result", "抽取结果无法校验")
 	}
@@ -267,15 +341,31 @@ func (s Service) Process(ctx context.Context, jid uuid.UUID) error {
 			}
 		}
 		done := time.Now()
-		return tx.Model(&job).Updates(map[string]any{"stage": "review_ready", "status": "review_ready", "finished_at": &done, "error_code": nil, "error_message": nil, "temporary_locator": nil}).Error
+		if e := tx.Model(&job).Updates(map[string]any{"stage": "review_ready", "status": "review_ready", "finished_at": &done, "error_code": nil, "error_message": nil, "temporary_locator": nil}).Error; e != nil {
+			return e
+		}
+		return tx.Model(&src).Update("status", "review_ready").Error
 	})
 	if e != nil {
 		return e
 	}
 	if src.SourceType == "file" {
-		_ = s.Files.RemoveJob(job.ID)
+		if e := s.Files.RemoveJob(job.ID); e != nil {
+			slog.Error("ingestion_cleanup_error", "job_id", job.ID, "error_type", fmt.Sprintf("%T", e))
+		}
 	}
-	_ = s.DB.Model(&src).Update("status", "review_ready")
+	slog.Info("ingestion_review_ready", "job_id", job.ID, "source_id", src.ID,
+		"attempt", job.Attempts, "candidates", len(items), "duration_ms", time.Since(started).Milliseconds())
+	return nil
+}
+
+func (s Service) setStage(ctx context.Context, job *shared.IngestionJob, stage string, started time.Time, pages int) error {
+	if e := s.DB.WithContext(ctx).Model(job).Update("stage", stage).Error; e != nil {
+		return e
+	}
+	job.Stage = stage
+	slog.Info("ingestion_stage", "job_id", job.ID, "source_id", job.SourceItemID,
+		"stage", stage, "attempt", job.Attempts, "pages", pages, "elapsed_ms", time.Since(started).Milliseconds())
 	return nil
 }
 
@@ -306,6 +396,21 @@ func boundPages(pages []Page) ([]Page, int) {
 	return out, trimmed
 }
 
+func sourceChecksum(fileChecksum, message string) string {
+	if message == "" {
+		return fileChecksum
+	}
+	combined := sha256.Sum256([]byte("file-message-v1\x00" + fileChecksum + "\x00" + message))
+	return hex.EncodeToString(combined[:])
+}
+
+func withTeacherMessage(src shared.SourceItem, pages []Page) []Page {
+	if src.SourceType != "file" || src.RawText == nil {
+		return pages
+	}
+	return append([]Page{{Number: 0, Text: *src.RawText}}, pages...)
+}
+
 func (s Service) parse(ctx context.Context, job *shared.IngestionJob, src *shared.SourceItem) ([]Page, error) {
 	if src.SourceType == "text" && src.RawText != nil {
 		return []Page{{Number: 1, Text: *src.RawText}}, nil
@@ -321,21 +426,30 @@ func (s Service) parse(ctx context.Context, job *shared.IngestionJob, src *share
 }
 func (s Service) fail(j *shared.IngestionJob, code, msg string) error {
 	now := time.Now()
-	log.Printf("ingestion failed job_id=%s source_id=%s stage=%s attempts=%d code=%s message=%s", j.ID, j.SourceItemID, j.Stage, j.Attempts, code, msg)
+	slog.Error("ingestion_failed", "job_id", j.ID, "source_id", j.SourceItemID,
+		"stage", j.Stage, "attempt", j.Attempts, "code", code)
 	// 内存里的 job 也要同步，创建接口在投递失败时会把它作为响应体返回。
 	j.Stage, j.Status, j.ErrorCode, j.ErrorMessage, j.FinishedAt, j.TemporaryLocator = "failed", "failed", &code, &msg, &now, nil
-	_ = s.Files.RemoveJob(j.ID)
-	if e := s.DB.Model(j).Updates(map[string]any{"stage": "failed", "status": "failed", "error_code": code, "error_message": msg, "finished_at": &now, "temporary_locator": nil}).Error; e != nil {
+	if e := s.DB.Transaction(func(tx *gorm.DB) error {
+		if e := tx.Model(j).Updates(map[string]any{"stage": "failed", "status": "failed", "error_code": code, "error_message": msg, "finished_at": &now, "temporary_locator": nil}).Error; e != nil {
+			return e
+		}
+		return tx.Model(&shared.SourceItem{}).Where("id=?", j.SourceItemID).Update("status", "failed").Error
+	}); e != nil {
 		return e
 	}
-	return s.DB.Model(&shared.SourceItem{}).Where("id=?", j.SourceItemID).Update("status", "failed").Error
+	if e := s.Files.RemoveJob(j.ID); e != nil {
+		slog.Error("ingestion_cleanup_error", "job_id", j.ID, "error_type", fmt.Sprintf("%T", e))
+	}
+	return nil
 }
 func (s Service) retryOrFail(j *shared.IngestionJob, stage, code, msg string) error {
 	// j.Attempts 是含本次在内的执行次数，Process 里已经记过账，这里不要再加一。
 	if j.Attempts >= j.MaxAttempts {
 		return s.fail(j, code, msg)
 	}
-	log.Printf("ingestion retry job_id=%s source_id=%s stage=%s attempt=%d/%d code=%s message=%s", j.ID, j.SourceItemID, stage, j.Attempts, j.MaxAttempts, code, msg)
+	slog.Warn("ingestion_retry", "job_id", j.ID, "source_id", j.SourceItemID,
+		"stage", stage, "attempt", j.Attempts, "max_attempts", j.MaxAttempts, "code", code)
 	if e := s.DB.Model(j).Updates(map[string]any{"stage": stage, "status": "queued", "error_code": code, "error_message": msg}).Error; e != nil {
 		return e
 	}
@@ -350,7 +464,13 @@ func validate(items []Extracted, pages []Page) error {
 		if strings.TrimSpace(i.Title) == "" {
 			return fmt.Errorf("empty title")
 		}
+		if len(i.Evidence) == 0 {
+			return fmt.Errorf("missing evidence")
+		}
 		for _, e := range i.Evidence {
+			if strings.TrimSpace(e.TextExcerpt) == "" {
+				return fmt.Errorf("empty evidence")
+			}
 			if t, ok := valid[e.PageNumber]; !ok || !strings.Contains(t, e.TextExcerpt) {
 				return fmt.Errorf("invalid evidence")
 			}

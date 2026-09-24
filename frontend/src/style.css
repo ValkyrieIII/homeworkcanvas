@@ -322,6 +322,16 @@ textarea {
     font: inherit;
     outline-color: #6e9dcf;
 }
+.edit-input {
+    display: block;
+    width: 100%;
+    max-width: 560px;
+    margin: 8px 0 16px;
+    padding: 10px 12px;
+    border: 1px solid #ccd5e1;
+    border-radius: 7px;
+    font: inherit;
+}
 @media (max-width: 800px) {
     .app-shell {
         grid-template-columns: 1fr;

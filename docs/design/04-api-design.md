@@ -94,10 +94,10 @@
 | 方法与路径 | 权限 | 说明 |
 | --- | --- | --- |
 | `POST /course-instances/{id}/sources/text` | active member | 提交文字消息；返回 SourceItem 和 Job |
-| `POST /course-instances/{id}/sources/file` | active member | `multipart/form-data` 上传 PPT/PDF；返回 `202 Accepted` 与 Job |
+| `POST /course-instances/{id}/sources/file` | active member | `multipart/form-data` 上传 PDF/PPT/PPTX，可同时传 `text` 表示同一条老师通知；新任务返回 `202 Accepted`，相同文件与文字返回 `200 OK` 与原有 Source/Job，响应含 `reused` |
 | `GET /ingestion-jobs/{id}` | 来源提交者或 maintainer | 查看状态、阶段、错误与候选数量 |
 | `GET /course-instances/{id}/assignment-candidates` | maintainer | 按 `pending / accepted / rejected` 查询候选 |
-| `POST /assignment-candidates/{id}/accept` | maintainer | 可提交修改后的 Assignment 字段；原子发布 |
+| `POST /assignment-candidates/{id}/accept` | maintainer | 审核页传 `edited: true` 和完整的标题、说明、截止时间、提交方式；允许将可空字段清空，原子更新候选并发布 |
 | `POST /assignment-candidates/{id}/reject` | maintainer | 可选审核说明 |
 
 文字来源请求：
@@ -110,7 +110,7 @@
 
 ## 5. 幂等与并发
 
-- 文件或文字来源创建支持 `Idempotency-Key` 请求头；同一用户、同一路径、同一键在有效期内返回同一来源与 Job。
+- 文件上传按 `(课程实例、提交者、文件内容 SHA-256)` 去重；已有任务未失败时返回原有 Source/Job，失败后允许重新上传。不同用户和不同课程互不复用。当前文字来源与显式 `Idempotency-Key` 请求头尚未实现幂等。
 - `accept` 使用候选行锁；重复接受返回 `409 assignments.candidate_not_pending`，不会创建第二份作业。
 - `PUT /my-state` 是幂等 upsert；最后一次成功写入为准。
 - 所有修改接口返回最新资源版本；首版不引入通用乐观锁，只有 Candidate 审核使用事务锁定。

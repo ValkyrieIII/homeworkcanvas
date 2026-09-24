@@ -7,6 +7,7 @@ import (
 	"gorm.io/gorm/clause"
 	"homeworkcanvas/backend/internal/courses"
 	"homeworkcanvas/backend/internal/shared"
+	"strings"
 	"time"
 )
 
@@ -20,6 +21,7 @@ type CreateInput struct {
 	Description      string     `json:"description"`
 	OfficialDueAt    *time.Time `json:"official_due_at"`
 	SubmissionMethod *string    `json:"submission_method"`
+	Edited           bool       `json:"edited,omitempty"`
 }
 
 func (s Service) CreateManual(ctx context.Context, u, ci uuid.UUID, in CreateInput) (shared.Assignment, error) {
@@ -143,17 +145,27 @@ func (s Service) AcceptCandidate(ctx context.Context, u, cid uuid.UUID, in Creat
 		if e := s.Membership.RequireMaintainer(ctx, u, src.CourseInstanceID); e != nil {
 			return e
 		}
-		if in.Title == "" {
-			in.Title = c.Title
-		}
-		if in.Description == "" {
-			in.Description = c.Description
-		}
-		if in.OfficialDueAt == nil {
-			in.OfficialDueAt = c.OfficialDueAt
-		}
-		if in.SubmissionMethod == nil {
-			in.SubmissionMethod = c.SubmissionMethod
+		if in.Edited {
+			if strings.TrimSpace(in.Title) == "" {
+				return shared.JSONError("assignments.invalid_input", "作业标题不能为空", 400)
+			}
+			in.Title = strings.TrimSpace(in.Title)
+			if e := tx.Model(&c).Updates(map[string]any{"title": in.Title, "description": in.Description, "official_due_at": in.OfficialDueAt, "submission_method": in.SubmissionMethod}).Error; e != nil {
+				return e
+			}
+		} else {
+			if in.Title == "" {
+				in.Title = c.Title
+			}
+			if in.Description == "" {
+				in.Description = c.Description
+			}
+			if in.OfficialDueAt == nil {
+				in.OfficialDueAt = c.OfficialDueAt
+			}
+			if in.SubmissionMethod == nil {
+				in.SubmissionMethod = c.SubmissionMethod
+			}
 		}
 		out = shared.Assignment{CourseInstanceID: src.CourseInstanceID, Title: in.Title, Description: in.Description, OfficialDueAt: in.OfficialDueAt, SubmissionMethod: in.SubmissionMethod, Status: "published", SourceCandidateID: &c.ID, CreatedBy: u}
 		if e := tx.Create(&out).Error; e != nil {

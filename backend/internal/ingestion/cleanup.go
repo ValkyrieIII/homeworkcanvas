@@ -1,7 +1,7 @@
 package ingestion
 
 import (
-	"log"
+	"log/slog"
 	"os"
 	"time"
 
@@ -39,7 +39,7 @@ func (s Service) SweepStale(now time.Time, retention time.Duration) error {
 		if !gone {
 			continue
 		}
-		log.Printf("ingestion sweep removing job_id=%s", id)
+		slog.Info("ingestion_sweep_remove", "job_id", id)
 		if e := s.Files.RemoveJob(id); e != nil {
 			return e
 		}

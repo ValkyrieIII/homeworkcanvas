@@ -9,11 +9,43 @@ type Candidate = {
     official_due_at: string | null;
     submission_method: string | null;
     uncertain_fields: string;
+    raw_due_expression: string | null;
+    evidence: string;
 };
+type Draft = { title: string; description: string; due: string; submission: string };
 const props = defineProps<{ courseId: string }>(),
     items = ref<Candidate[]>([]),
+    drafts = ref<Record<string, Draft>>({}),
+    editing = ref<Record<string, boolean>>({}),
     loading = ref(false),
+    saving = ref(false),
     error = ref("");
+function dateInput(value: string | null) {
+    if (!value) return "";
+    const d = new Date(value);
+    const local = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
+    return local.toISOString().slice(0, 16);
+}
+function evidence(value: string) {
+    try { return JSON.parse(value) as { page_number: number; text_excerpt: string }[]; }
+    catch { return []; }
+}
+function uncertain(value: string) {
+    try { return (JSON.parse(value) as string[]).join("、") || "无"; }
+    catch { return value; }
+}
+function draftFor(c: Candidate): Draft {
+    return {
+        title: c.title,
+        description: c.description,
+        due: dateInput(c.official_due_at),
+        submission: c.submission_method ?? "",
+    };
+}
+function cancelEdit(c: Candidate) {
+    drafts.value[c.id] = draftFor(c);
+    editing.value[c.id] = false;
+}
 async function load() {
     loading.value = true;
     error.value = "";
@@ -25,6 +57,7 @@ async function load() {
                 )
             ).data,
         );
+        drafts.value = Object.fromEntries(items.value.map(c => [c.id, draftFor(c)]));
     } catch (e: any) {
         error.value = e.message;
     } finally {
@@ -32,14 +65,31 @@ async function load() {
     }
 }
 async function review(id: string, accepted: boolean) {
+    if (saving.value) return;
+    const draft = drafts.value[id];
+    if (accepted && !draft?.title.trim()) {
+        error.value = "作业标题不能为空";
+        return;
+    }
+    saving.value = true;
+    error.value = "";
     try {
+        const body = accepted ? {
+            edited: true,
+            title: draft.title.trim(),
+            description: draft.description,
+            official_due_at: draft.due ? new Date(draft.due).toISOString() : null,
+            submission_method: draft.submission.trim() || null,
+        } : {};
         await api(
             `/assignment-candidates/${id}/${accepted ? "accept" : "reject"}`,
-            { method: "POST", body: JSON.stringify({}) },
+            { method: "POST", body: JSON.stringify(body) },
         );
         await load();
     } catch (e: any) {
         error.value = e.message;
+    } finally {
+        saving.value = false;
     }
 }
 watch(() => props.courseId, load);
@@ -54,13 +104,34 @@ onMounted(load);
             没有待审核候选。
         </p>
         <article v-for="c in items" :key="c.id" class="card">
-            <h3>{{ c.title }}</h3>
-            <p>{{ c.description }}</p>
-            <p>官方截止：{{ formatDate(c.official_due_at) }}</p>
-            <p v-if="c.submission_method">提交方式：{{ c.submission_method }}</p>
-            <p class="uncertain">待确认字段：{{ c.uncertain_fields }}</p>
-            <button @click="review(c.id, true)">确认发布</button
-            ><button class="secondary" @click="review(c.id, false)">
+            <template v-if="editing[c.id] && drafts[c.id]">
+                <h3>编辑候选作业</h3>
+                <label :for="`title-${c.id}`">标题</label>
+                <input :id="`title-${c.id}`" v-model="drafts[c.id].title" class="edit-input" />
+                <label :for="`description-${c.id}`">作业说明</label>
+                <textarea :id="`description-${c.id}`" v-model="drafts[c.id].description" />
+                <label :for="`due-${c.id}`">官方截止时间（留空表示待确认）</label>
+                <input :id="`due-${c.id}`" v-model="drafts[c.id].due" class="edit-input" type="datetime-local" />
+                <label :for="`submission-${c.id}`">提交方式</label>
+                <input :id="`submission-${c.id}`" v-model="drafts[c.id].submission" class="edit-input" />
+            </template>
+            <template v-else>
+                <h3>{{ c.title }}</h3>
+                <p>{{ c.description }}</p>
+                <p>官方截止：{{ formatDate(c.official_due_at) }}</p>
+                <p v-if="c.submission_method">提交方式：{{ c.submission_method }}</p>
+            </template>
+            <p v-if="c.raw_due_expression">原文截止描述：{{ c.raw_due_expression }}</p>
+            <p class="uncertain">待确认字段：{{ uncertain(c.uncertain_fields) }}</p>
+            <details><summary>查看来源证据</summary>
+                <p v-for="(item, index) in evidence(c.evidence)" :key="index">
+                    {{ item.page_number === 0 ? "老师文字" : `附件第 ${item.page_number} 页` }}：{{ item.text_excerpt }}
+                </p>
+            </details>
+            <button v-if="!editing[c.id]" class="secondary" @click="editing[c.id] = true">编辑</button>
+            <button v-else class="secondary" @click="cancelEdit(c)">取消编辑</button>
+            <button :disabled="saving" @click="review(c.id, true)">确认发布</button
+            ><button :disabled="saving" class="secondary" @click="review(c.id, false)">
                 拒绝
             </button>
         </article>

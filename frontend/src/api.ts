@@ -16,7 +16,9 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   });
   if (!response.ok) {
     const body = await response.json().catch(() => null);
-    throw new Error(body?.error?.message ?? "请求失败");
+    const requestId = response.headers.get("X-Request-ID");
+    const message = body?.error?.message ?? "请求失败";
+    throw new Error(requestId ? `${message}（请求编号：${requestId}）` : message);
   }
   return response.json();
 }

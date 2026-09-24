@@ -5,14 +5,13 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
-	"log"
 	"net/http"
 )
 
 func RespondError(c *gin.Context, e error) {
 	ae, explicit := classify(e)
 	if !explicit {
-		log.Printf("http error method=%s path=%s status=%d code=%s err=%v", c.Request.Method, c.FullPath(), ae.Status, ae.Code, e)
+		LogHTTPError(c, ae.Code, ae.Status, e)
 	}
 	c.JSON(ae.Status, gin.H{"error": gin.H{"code": ae.Code, "message": ae.Message, "details": gin.H{}}})
 }

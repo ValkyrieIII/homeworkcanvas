@@ -1,16 +1,18 @@
 package main
 
 import (
+	"fmt"
 	"github.com/hibiken/asynq"
 	"homeworkcanvas/backend/internal/courses"
 	"homeworkcanvas/backend/internal/ingestion"
 	"homeworkcanvas/backend/internal/shared"
-	"log"
+	"log/slog"
 	"time"
 )
 
 func main() {
 	_ = shared.LoadDotEnv(".env")
+	shared.ConfigureLogging()
 	db, e := shared.OpenDatabase()
 	if e != nil {
 		panic(e)
@@ -30,7 +32,7 @@ func main() {
 func sweep(svc ingestion.Service) {
 	for {
 		if e := svc.SweepStale(time.Now(), 24*time.Hour); e != nil {
-			log.Printf("ingestion sweep failed: %v", e)
+			slog.Error("ingestion_sweep_error", "error_type", fmt.Sprintf("%T", e))
 		}
 		time.Sleep(time.Hour)
 	}
