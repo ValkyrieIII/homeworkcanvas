@@ -1,8 +1,8 @@
 # Homework Canvas
 
-Homework Canvas 是课程作业管理工作台：把老师发布的文字、PDF、PPT/PPTX 整理为待审核候选，再由课程维护者确认并发布为全班共享作业。学生可以维护个人计划截止时间与完成状态，但不会改动官方截止时间。
+Homework Canvas 是课程作业管理工作台：用户自行加入课程、提交老师通知，管理员核对待审核候选并发布全班共享作业。用户可以维护个人计划截止时间与完成状态，但不会改动官方截止时间。
 
-> 状态：已完成阶段一至阶段三的工程实现。当前使用本地身份适配器，尚未接入真实 UniSSO；未配置模型时使用本地规则抽取器。
+> 状态：管理员端与用户端的业务页面和接口已落地。当前使用本地身份适配器，尚未接入真实登录与生产环境鉴权；未配置模型时使用本地规则抽取器。
 
 ## 设计边界
 
@@ -20,7 +20,8 @@ Homework Canvas 是课程作业管理工作台：把老师发布的文字、PDF�
 | --- | --- |
 | 阶段一 | 课程实例、成员关系、课程时间、动态课表、共享作业、个人 DDL、文字导入、候选审核发布 |
 | 阶段二 | PDF/PPT/PPTX 临时上传、逐页解析、规则定位、候选页预览、异步进度与失败反馈 |
-| 阶段三 | 成员角色/状态维护、最后维护者保护、站内通知、候选审核指标、通用模型接口 |
+| 阶段三 | 站内通知、候选审核指标、通用模型接口 |
+| 双端 | 课程目录与自主选退课、管理员全站课程/课表/作业维护、成员与来源查看、全站候选审核 |
 
 同一用户向同一课程重复上传相同文件与相同随附文字时，会返回已有的处理任务，不再生成第二批候选；原任务失败后可以重新上传。随附文字变化会生成新任务，纯文字来源暂未按内容去重。
 
@@ -55,7 +56,7 @@ Gin API ─────────────────► PostgreSQL
   → 模型抽取最小上下文
   → 校验候选、页码和文字证据
   → review_ready
-  → 维护者接受或拒绝
+  → 管理员接受或拒绝
   → 发布共享作业并通知成员
 ~~~
 
@@ -121,7 +122,13 @@ X-Canvas-Subject: dev-user
 X-Canvas-Name: Local Developer
 ~~~
 
-生产环境应替换为 UniSSO 验证器。浏览器不应自行传递可伪造身份；课程、作业、来源、任务与候选都按有效 Enrollment 或维护者角色校验。
+本地开发中，新用户默认为普通用户。需要演示管理员端时，先用对应 `X-Canvas-Subject` 请求一次 API 创建用户，再由数据库管理员明确授予全站管理员类型，例如：
+
+~~~sql
+UPDATE users SET role = 'admin' WHERE external_subject = 'dev-user';
+~~~
+
+旧课程维护者不会在迁移时自动成为全站管理员。生产环境应替换本地身份适配器，设计管理员授予流程并接入服务端鉴权；当前请求头可伪造，仅适用于本地开发。
 
 ## 模型配置
 
@@ -169,15 +176,15 @@ $env:MODEL_NAME='your-model'
 
 ## 权限、个人状态与通知
 
-| 角色 | 能力 |
+| 全站类型 | 能力 |
 | --- | --- |
-| student | 查看已加入课程、导入来源、维护自己的 DDL 与完成状态 |
-| maintainer | 包含学生能力；可维护成员、课表、共享作业与候选审核 |
+| user | 自主选退课、查看已加入课程、导入来源、维护自己的 DDL 与完成状态 |
+| admin | 包含用户能力；管理全站课程、课表、成员状态、共享作业与候选审核 |
 
 - personal_due_at 为空时，个人有效截止时间使用 official_due_at。
 - 官方逾期只按 official_due_at 判断，不会被个人计划时间掩盖。
-- 手工发布作业或确认候选作业后，会为所有有效课程成员创建站内通知。
-- 系统不允许把最后一名有效维护者降级或设为离开。
+- 手工发布、确认候选、修改或撤回共享作业后，会为所有有效课程成员创建站内通知；撤回保留作业记录，但不再出现在用户作业列表。
+- 管理员类型独立于课程参与关系，创建课程不会自动加入课程。
 
 ## 主要接口
 
@@ -185,21 +192,31 @@ $env:MODEL_NAME='your-model'
 
 | 接口 | 用途 |
 | --- | --- |
-| POST /course-instances | 创建课程实例；创建者成为维护者 |
-| GET /course-instances | 查询当前用户已加入课程 |
-| GET / POST / PATCH /course-instances/{id}/enrollments | 查询、添加和修改课程成员 |
+| POST /course-instances | 管理员创建课程实例 |
+| GET /course-instances | 浏览可选课程目录 |
+| GET /me/course-instances | 查询当前用户已加入课程 |
+| PUT / DELETE /course-instances/{id}/enrollment | 当前用户加入或退出课程 |
+| GET /admin/course-instances | 管理员查询全站课程 |
+| PATCH /course-instances/{id} | 管理员修改课程资料或归档 |
+| GET /course-instances/{id}/enrollments | 管理员查看课程成员 |
 | PUT /course-instances/{id}/meetings | 整体替换课程时间安排 |
 | GET /me/schedule | 动态生成个人课表 |
-| GET /me/assignments?bucket=... | 作业视图；支持 upcoming、overdue、undated、all |
-| POST /course-instances/{id}/assignments | 手工发布共享作业 |
+| GET /me/assignments?bucket=...&course_instance_id=... | 个人作业视图；支持分组与课程筛选 |
+| GET /admin/assignments?status=... | 管理员跨课程查看已发布或已撤回作业，支持课程筛选和续页 |
+| GET /admin/assignment-candidates | 管理员跨课程待审核候选，支持课程筛选和续页 |
+| GET /admin/source-issues | 管理员查看处理失败或积压的来源，支持课程筛选和续页 |
+| GET / POST /course-instances/{id}/assignments | 管理员查看或手工发布共享作业 |
+| PATCH /assignments/{id} | 管理员修改共享作业 |
+| POST /assignments/{id}/retract | 管理员撤回共享作业，保留历史记录 |
 | PUT /assignments/{id}/my-state | 更新当前用户个人 DDL 与完成状态 |
 | POST /course-instances/{id}/sources/text | 提交文字来源 |
 | POST /course-instances/{id}/sources/file | 上传 PDF/PPT/PPTX，表单字段为 file |
 | GET /ingestion-jobs/{id} | 查询处理状态、阶段和失败原因 |
-| GET /course-instances/{id}/assignment-candidates | 维护者查看候选 |
+| GET /me/sources | 当前用户查看自己的来源处理记录 |
+| GET /course-instances/{id}/sources | 管理员查看课程来源处理记录 |
 | POST /assignment-candidates/{id}/accept | 原子确认候选并发布作业 |
 | POST /assignment-candidates/{id}/reject | 拒绝候选 |
-| GET /course-instances/{id}/ingestion-metrics | 查询 pending、accepted、rejected 指标 |
+| GET /course-instances/{id}/ingestion-metrics | 管理员查询 pending、accepted、rejected 指标 |
 | GET /me/notifications | 查询站内通知 |
 | POST /notifications/{id}/read | 标记通知已读 |
 
@@ -208,8 +225,8 @@ $env:MODEL_NAME='your-model'
 ~~~json
 {
   "error": {
-    "code": "courses.not_maintainer",
-    "message": "你没有维护该课程的权限"
+    "code": "courses.not_admin",
+    "message": "需要管理员身份"
   }
 }
 ~~~
@@ -223,15 +240,13 @@ $env:MODEL_NAME='your-model'
 
 ## 验证
 
-已执行：
+本次作业优先重构执行了以下编译与类型检查，并用隔离的临时数据库结构检查桌面、窄屏和主要交互；未运行自动化测试。临时数据已清理，原有业务数据库未迁移。
 
 ~~~powershell
 Set-Location backend
-go test ./...
-go build ./...
-go vet ./...
+go build ./cmd/api ./cmd/worker
 
-Set-Location ..rontend
+Set-Location ../frontend
 npm run build
 ~~~
 

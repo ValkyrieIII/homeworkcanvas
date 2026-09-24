@@ -7,9 +7,10 @@ import CourseDetailLayout from "./views/CourseDetailLayout.vue";
 import CourseAssignmentsView from "./views/CourseAssignmentsView.vue";
 import CourseScheduleView from "./views/CourseScheduleView.vue";
 import CourseSourcesView from "./views/CourseSourcesView.vue";
-import CourseCandidatesView from "./views/CourseCandidatesView.vue";
 import NotificationsView from "./views/NotificationsView.vue";
-import CourseMembersView from "./views/CourseMembersView.vue";
+import AdminCoursesView from "./workspaces/admin/AdminCoursesView.vue";
+import AdminCourseView from "./workspaces/admin/AdminCourseView.vue";
+import AdminAssignmentsView from "./workspaces/admin/AdminAssignmentsView.vue";
 
 export default createRouter({
   history: createWebHistory(),
@@ -43,20 +44,12 @@ export default createRouter({
           component: CourseSourcesView,
           props: true,
         },
-        {
-          path: "candidates",
-          name: "course-candidates",
-          component: CourseCandidatesView,
-          props: true,
-        },
-        {
-          path: "members",
-          name: "course-members",
-          component: CourseMembersView,
-          props: true,
-        },
       ],
     },
+    { path: "/admin", component: AdminAssignmentsView },
+    { path: "/admin/courses", component: AdminCoursesView },
+    { path: "/admin/courses/:courseId", component: AdminCourseView, props: true },
+    { path: "/admin/review", redirect: { path: "/admin", query: { tab: "pending" } } },
     { path: "/:pathMatch(.*)*", redirect: "/" },
   ],
 });

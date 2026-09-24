@@ -59,6 +59,29 @@ body {
     display: grid;
     gap: 5px;
 }
+.workspace-switch {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px;
+    margin: 0 8px 18px;
+    padding: 4px;
+    border-radius: 9px;
+    background: #eef2f6;
+}
+.workspace-switch a {
+    padding: 8px 4px;
+    border-radius: 6px;
+    color: #66758a;
+    font-size: 12px;
+    font-weight: 700;
+    text-align: center;
+    text-decoration: none;
+}
+.workspace-switch a.selected {
+    color: #1d4f89;
+    background: #fff;
+    box-shadow: 0 1px 3px #1b2c421a;
+}
 .side-nav a {
     display: flex;
     align-items: center;
@@ -212,6 +235,49 @@ h3 {
     height: 2px;
     background: #1f5ea8;
 }
+.tabs .tab-button {
+    position: relative;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    color: #637084;
+    padding: 10px 16px;
+    font: inherit;
+    font-size: 14px;
+    font-weight: 600;
+}
+.tabs .tab-button.active {
+    color: #1f5ea8;
+}
+.tabs .tab-button.active::after {
+    content: "";
+    position: absolute;
+    right: 10px;
+    bottom: -1px;
+    left: 10px;
+    height: 2px;
+    background: #1f5ea8;
+}
+.filter-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    margin: 8px 0 14px;
+    color: #526073;
+    font-weight: 600;
+}
+.filter-label select { max-width: min(100%, 340px); }
+.workbench-toolbar, .assignment-form-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+.admin-assignment-card { margin-bottom: 12px; }
+.admin-assignment-card .admin-form { margin-top: 16px; box-shadow: none; }
+.source-issues { margin-top: 42px; }
+.card.source-issue { display: grid; gap: 6px; margin-bottom: 10px; }
 .card {
     display: block;
     background: #fff;
@@ -232,6 +298,26 @@ h3 {
     border-color: #9ebde2;
     box-shadow: 0 6px 18px #27364c0d;
 }
+.admin-form { margin: 18px 0; }
+.admin-form h2 { margin-top: 0; }
+.admin-form label { display: grid; gap: 6px; font-size: 14px; font-weight: 700; color: #3c4b61; }
+.admin-form input, .admin-form select {
+    width: 100%; min-width: 0; padding: 9px 11px;
+    border: 1px solid #ccd5e1; border-radius: 7px; background: #fff;
+    font: inherit; font-weight: 400;
+}
+.form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin: 12px 0; }
+.meeting-row, .admin-list-item { display: flex; align-items: end; flex-wrap: wrap; gap: 10px; padding: 12px 0; border-bottom: 1px solid #e8ebef; }
+.meeting-row label { min-width: 95px; flex: 1; }
+.admin-list-item strong { min-width: 180px; }
+.admin-list-item span { flex: 1; }
+.retract-confirm { flex-basis: 100%; padding: 10px 12px; background: #fff7ed; border-radius: 7px; }
+.retract-confirm p { margin: 0 0 8px; color: #8b4c16; font-size: 13px; }
+.plan-editor { margin-top: 12px; padding-top: 12px; border-top: 1px solid #e8ebef; }
+.plan-editor label { display: grid; gap: 6px; max-width: 280px; font-size: 13px; font-weight: 700; }
+.plan-editor input { padding: 9px 11px; border: 1px solid #ccd5e1; border-radius: 7px; font: inherit; }
+.plan-editor p { margin-bottom: 0; color: #718096; font-size: 12px; }
+.source-note { color: #718096; font-size: 12px; }
 .card small {
     font-weight: 700;
     color: #718096;
@@ -420,6 +506,7 @@ textarea {
         white-space: nowrap;
         padding: 9px 11px;
     }
+    .workspace-switch { width: min(280px, 100%); margin: 0 5px 12px; }
     .side-nav a.active {
         box-shadow: inset 0 -2px #1f5ea8;
     }
@@ -436,4 +523,9 @@ textarea {
     .content {
         padding: 24px 18px 48px;
     }
+    .workbench-toolbar { align-items: stretch; }
+    .workbench-toolbar .filter-label { width: 100%; }
+    .workbench-toolbar select { flex: 1; min-width: 0; }
+    .tabs { overflow-x: auto; overflow-y: hidden; }
+    .tabs .tab-button { white-space: nowrap; }
 }

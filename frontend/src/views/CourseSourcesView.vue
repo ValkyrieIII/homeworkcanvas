@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onUnmounted, ref } from "vue";
+import { onMounted, onUnmounted, ref, watch } from "vue";
 import { api } from "../api";
 type Job = {
     id: string;
@@ -7,14 +7,34 @@ type Job = {
     status: string;
     error_message?: string | null;
 };
+type Source = {
+    id: string;
+    course_instance_id: string;
+    source_type: string;
+    original_filename: string | null;
+    status: string;
+    stage: string;
+    error_message: string | null;
+};
 const props = defineProps<{ courseId: string }>();
+const statusLabel: Record<string, string> = {
+    queued: "排队中", processing: "处理中", review_ready: "待管理员审核",
+    completed: "已完成", failed: "处理失败",
+};
 const text = ref(""),
     file = ref<File | null>(null),
     fileInput = ref<HTMLInputElement | null>(null),
     message = ref(""),
     error = ref(""),
     sending = ref(false),
-    job = ref<Job | null>(null);
+    job = ref<Job | null>(null),
+    sources = ref<Source[]>([]);
+async function loadSources() {
+    try {
+        const result = await api<{ data: Source[] | null }>("/me/sources");
+        sources.value = (result.data ?? []).filter(item => item.course_instance_id === props.courseId);
+    } catch (e: any) { error.value = e.message; }
+}
 let timer: number | undefined;
 function stopPolling() {
     if (timer) {
@@ -26,8 +46,10 @@ async function refreshJob() {
     if (!job.value) return;
     try {
         job.value = await api<Job>(`/ingestion-jobs/${job.value.id}`);
-        if (["review_ready", "completed", "failed"].includes(job.value.status))
+        if (["review_ready", "completed", "failed"].includes(job.value.status)) {
             stopPolling();
+            await loadSources();
+        }
     } catch (e: any) {
         error.value = e.message;
         stopPolling();
@@ -67,6 +89,7 @@ async function submit() {
             ? "这组文字和附件此前已导入，已显示原有处理结果。"
             : "已提交一条导入任务，文字和附件会一起交给解析流程。";
         watchJob(r.job);
+        await loadSources();
     } catch (e: any) {
         error.value = e.message;
     } finally {
@@ -74,6 +97,8 @@ async function submit() {
     }
 }
 onUnmounted(stopPolling);
+onMounted(loadSources);
+watch(() => props.courseId, loadSources);
 </script>
 <template>
     <div class="source-import">
@@ -106,13 +131,20 @@ onUnmounted(stopPolling);
         </section>
         <section v-if="job" class="card job-card">
             <h3>处理进度</h3>
-            <p>当前阶段：{{ job.stage }}</p>
-            <p>状态：{{ job.status }}</p>
+            <p>处理状态：{{ statusLabel[job.status] || job.status }}</p>
             <p v-if="job.error_message" class="error">
                 {{ job.error_message }}
             </p>
             <p v-else-if="job.status === 'review_ready'" class="notice">
-                候选已准备好，请由课程维护者前往“候选审核”确认。
+                候选已准备好，等待管理员核对发布。
+            </p>
+        </section>
+        <section class="card">
+            <h3>我的提交记录</h3>
+            <p v-if="!sources.length">暂无提交记录。</p>
+            <p v-for="source in sources" :key="source.id">
+                {{ source.original_filename || "文字通知" }} · {{ statusLabel[source.status] || source.status }}
+                <span v-if="source.error_message" class="error">{{ source.error_message }}</span>
             </p>
         </section>
     </div>

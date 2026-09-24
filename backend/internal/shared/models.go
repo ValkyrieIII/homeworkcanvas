@@ -24,6 +24,7 @@ type User struct {
 	ExternalSubject string `gorm:"uniqueIndex;not null"`
 	DisplayName     string `gorm:"not null"`
 	Email           *string
+	Role            string `gorm:"not null;default:user" json:"role"`
 	Status          string `gorm:"not null;default:active"`
 }
 type Course struct {
@@ -45,7 +46,6 @@ type Enrollment struct {
 	Base
 	UserID           uuid.UUID `gorm:"type:uuid;not null;uniqueIndex:ux_enrollment"`
 	CourseInstanceID uuid.UUID `gorm:"type:uuid;not null;uniqueIndex:ux_enrollment"`
-	Role             string    `gorm:"not null"`
 	Status           string    `gorm:"not null;default:active"`
 	JoinedAt         time.Time `gorm:"not null"`
 }
@@ -61,14 +61,14 @@ type CourseMeeting struct {
 }
 type Assignment struct {
 	Base
-	CourseInstanceID  uuid.UUID  `gorm:"type:uuid;not null;index"`
-	Title             string     `gorm:"not null"`
-	Description       string     `gorm:"not null;default:''"`
-	OfficialDueAt     *time.Time `gorm:"index"`
-	SubmissionMethod  *string
-	Status            string     `gorm:"not null;default:published"`
-	SourceCandidateID *uuid.UUID `gorm:"type:uuid;uniqueIndex"`
-	CreatedBy         uuid.UUID  `gorm:"type:uuid;not null"`
+	CourseInstanceID  uuid.UUID  `gorm:"type:uuid;not null;index" json:"course_instance_id"`
+	Title             string     `gorm:"not null" json:"title"`
+	Description       string     `gorm:"not null;default:''" json:"description"`
+	OfficialDueAt     *time.Time `gorm:"index" json:"official_due_at"`
+	SubmissionMethod  *string    `json:"submission_method"`
+	Status            string     `gorm:"not null;default:published" json:"status"`
+	SourceCandidateID *uuid.UUID `gorm:"type:uuid;uniqueIndex" json:"source_candidate_id"`
+	CreatedBy         uuid.UUID  `gorm:"type:uuid;not null" json:"created_by"`
 }
 type AssignmentUserState struct {
 	Base

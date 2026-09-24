@@ -20,7 +20,7 @@ func (s Service) RejectCandidate(ctx context.Context, u, id uuid.UUID, note *str
 	if e := s.DB.First(&src, "id=?", c.SourceItemID).Error; e != nil {
 		return e
 	}
-	if e := s.Membership.RequireMaintainer(ctx, u, src.CourseInstanceID); e != nil {
+	if e := s.Membership.RequireAdmin(ctx, u); e != nil {
 		return e
 	}
 	now := time.Now()

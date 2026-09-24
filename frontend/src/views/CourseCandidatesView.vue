@@ -1,9 +1,13 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from "vue";
 import { api } from "../api";
-import { arrayOrEmpty, formatDate } from "../types";
+import { arrayOrEmpty, formatDate, type PageResult } from "../types";
 type Candidate = {
     id: string;
+    course_name?: string;
+    term?: string;
+    source_type?: string;
+    original_filename?: string | null;
     title: string;
     description: string;
     official_due_at: string | null;
@@ -13,13 +17,15 @@ type Candidate = {
     evidence: string;
 };
 type Draft = { title: string; description: string; due: string; submission: string };
-const props = defineProps<{ courseId: string }>(),
+const props = defineProps<{ courseId?: string; embedded?: boolean }>(),
     items = ref<Candidate[]>([]),
+    nextCursor = ref<string | null>(null),
     drafts = ref<Record<string, Draft>>({}),
     editing = ref<Record<string, boolean>>({}),
     loading = ref(false),
     saving = ref(false),
     error = ref("");
+let loadRequest = 0;
 function dateInput(value: string | null) {
     if (!value) return "";
     const d = new Date(value);
@@ -46,22 +52,31 @@ function cancelEdit(c: Candidate) {
     drafts.value[c.id] = draftFor(c);
     editing.value[c.id] = false;
 }
-async function load() {
+async function load(cursor?: string) {
+    const request = ++loadRequest;
+    const requestedCourse = props.courseId;
     loading.value = true;
     error.value = "";
+    if (!cursor) {
+        items.value = [];
+        nextCursor.value = null;
+    }
     try {
-        items.value = arrayOrEmpty(
-            (
-                await api<{ data: Candidate[] | null }>(
-                    `/course-instances/${props.courseId}/assignment-candidates?status=pending`,
-                )
-            ).data,
-        );
-        drafts.value = Object.fromEntries(items.value.map(c => [c.id, draftFor(c)]));
+        const params = new URLSearchParams({ limit: "30" });
+        if (requestedCourse) params.set("course_instance_id", requestedCourse);
+        if (cursor) params.set("cursor", cursor);
+        const page = await api<PageResult<Candidate>>(`/admin/assignment-candidates?${params}`);
+        if (request !== loadRequest || props.courseId !== requestedCourse) return;
+        const incoming = arrayOrEmpty(page.data);
+        items.value = cursor ? [...items.value, ...incoming] : incoming;
+        nextCursor.value = page.next_cursor;
+        drafts.value = cursor
+            ? { ...drafts.value, ...Object.fromEntries(incoming.map(c => [c.id, draftFor(c)])) }
+            : Object.fromEntries(incoming.map(c => [c.id, draftFor(c)]));
     } catch (e: any) {
-        error.value = e.message;
+        if (request === loadRequest) error.value = e.message;
     } finally {
-        loading.value = false;
+        if (request === loadRequest) loading.value = false;
     }
 }
 async function review(id: string, accepted: boolean) {
@@ -92,18 +107,24 @@ async function review(id: string, accepted: boolean) {
         saving.value = false;
     }
 }
-watch(() => props.courseId, load);
-onMounted(load);
+watch(() => props.courseId, () => { void load(); });
+onMounted(() => { void load(); });
 </script>
 <template>
     <div>
-        <h2>候选审核</h2>
+        <template v-if="!embedded">
+            <p class="eyebrow">管理员端</p>
+            <h1>待审核候选</h1>
+        </template>
+        <p>核对来源证据后，修改、发布或拒绝候选。</p>
         <p v-if="loading">正在加载…</p>
         <p v-if="error" class="error">{{ error }}</p>
         <p v-if="!loading && !error && !items.length" class="empty">
             没有待审核候选。
         </p>
         <article v-for="c in items" :key="c.id" class="card">
+            <p v-if="c.course_name"><strong>{{ c.course_name }}</strong> · {{ c.term }}</p>
+            <p>来源：{{ c.original_filename || (c.source_type === "text" ? "老师文字通知" : "附件") }}</p>
             <template v-if="editing[c.id] && drafts[c.id]">
                 <h3>编辑候选作业</h3>
                 <label :for="`title-${c.id}`">标题</label>
@@ -135,5 +156,6 @@ onMounted(load);
                 拒绝
             </button>
         </article>
+        <button v-if="nextCursor" class="secondary" :disabled="loading" @click="load(nextCursor)">加载更多候选</button>
     </div>
 </template>

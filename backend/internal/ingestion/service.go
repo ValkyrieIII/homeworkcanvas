@@ -78,8 +78,94 @@ type FileSourceResult struct {
 	Reused bool
 }
 
+type MineSource struct {
+	ID               uuid.UUID `json:"id"`
+	CourseInstanceID uuid.UUID `json:"course_instance_id"`
+	CourseName       string    `json:"course_name"`
+	SubmittedBy      uuid.UUID `json:"submitted_by"`
+	SubmitterName    string    `json:"submitter_name"`
+	SourceType       string    `json:"source_type"`
+	OriginalFilename *string   `json:"original_filename"`
+	Status           string    `json:"status"`
+	JobID            uuid.UUID `json:"job_id"`
+	Stage            string    `json:"stage"`
+	ErrorMessage     *string   `json:"error_message"`
+	CreatedAt        time.Time `json:"created_at"`
+}
+
+func (s Service) ListMine(ctx context.Context, user uuid.UUID) ([]MineSource, error) {
+	rows := make([]MineSource, 0)
+	err := s.DB.WithContext(ctx).Table("source_items si").
+		Select(`si.id,si.course_instance_id,c.name AS course_name,si.submitted_by,
+			u.display_name AS submitter_name,si.source_type,si.original_filename,
+			si.status,ij.id AS job_id,ij.stage,ij.error_message,si.created_at`).
+		Joins("JOIN course_instances ci ON ci.id=si.course_instance_id").
+		Joins("JOIN courses c ON c.id=ci.course_id").
+		Joins("JOIN users u ON u.id=si.submitted_by").
+		Joins("JOIN enrollments e ON e.course_instance_id=ci.id AND e.user_id=? AND e.status='active'", user).
+		Joins("JOIN ingestion_jobs ij ON ij.source_item_id=si.id").
+		Where("si.submitted_by=?", user).Order("si.created_at DESC,si.id DESC").Scan(&rows).Error
+	return rows, err
+}
+
+func (s Service) ListCourseSources(ctx context.Context, actor, ci uuid.UUID) ([]MineSource, error) {
+	if err := s.Membership.RequireAdmin(ctx, actor); err != nil {
+		return nil, err
+	}
+	var rows []MineSource
+	err := s.DB.WithContext(ctx).Table("source_items si").
+		Select(`si.id,si.course_instance_id,c.name AS course_name,si.submitted_by,
+			u.display_name AS submitter_name,si.source_type,si.original_filename,
+			si.status,ij.id AS job_id,ij.stage,ij.error_message,si.created_at`).
+		Joins("JOIN course_instances ci ON ci.id=si.course_instance_id").
+		Joins("JOIN courses c ON c.id=ci.course_id").
+		Joins("JOIN users u ON u.id=si.submitted_by").
+		Joins("JOIN ingestion_jobs ij ON ij.source_item_id=si.id").
+		Where("si.course_instance_id=?", ci).Order("si.created_at DESC,si.id DESC").Scan(&rows).Error
+	return rows, err
+}
+
+// ListAdminIssues 只汇总失败和长时间未完成的来源，不暴露原始文件内容。
+func (s Service) ListAdminIssues(ctx context.Context, actor uuid.UUID, courseID *uuid.UUID, limit int, rawCursor string) ([]MineSource, *string, error) {
+	if err := s.Membership.RequireAdmin(ctx, actor); err != nil {
+		return nil, nil, err
+	}
+	q := s.DB.WithContext(ctx).Table("source_items si").
+		Select(`si.id,si.course_instance_id,c.name AS course_name,si.submitted_by,
+			u.display_name AS submitter_name,si.source_type,si.original_filename,
+			si.status,ij.id AS job_id,ij.stage,ij.error_message,si.created_at`).
+		Joins("JOIN course_instances ci ON ci.id=si.course_instance_id").
+		Joins("JOIN courses c ON c.id=ci.course_id").
+		Joins("JOIN users u ON u.id=si.submitted_by").
+		Joins("JOIN ingestion_jobs ij ON ij.source_item_id=si.id").
+		Where("(si.status='failed' OR (si.status IN ('queued','processing') AND si.created_at < ?))", time.Now().Add(-15*time.Minute))
+	if courseID != nil {
+		q = q.Where("si.course_instance_id=?", *courseID)
+	}
+	if rawCursor != "" {
+		cursor, err := shared.DecodePageCursor(rawCursor)
+		if err != nil || cursor.Time == nil {
+			return nil, nil, shared.JSONError("shared.invalid_cursor", "分页位置无效", 400)
+		}
+		q = q.Where("si.created_at < ? OR (si.created_at = ? AND si.id < ?)", *cursor.Time, *cursor.Time, cursor.ID)
+	}
+	rows := make([]MineSource, 0)
+	err := q.Order("si.created_at DESC,si.id DESC").Limit(limit + 1).Scan(&rows).Error
+	if err != nil {
+		return nil, nil, err
+	}
+	var next *string
+	if len(rows) > limit {
+		rows = rows[:limit]
+		last := rows[len(rows)-1]
+		value := shared.EncodePageCursor(shared.PageCursor{Time: &last.CreatedAt, ID: last.ID})
+		next = &value
+	}
+	return rows, next, nil
+}
+
 func (s Service) ReviewMetrics(ctx context.Context, userID, courseInstanceID uuid.UUID) (ReviewMetrics, error) {
-	if e := s.Membership.RequireMaintainer(ctx, userID, courseInstanceID); e != nil {
+	if e := s.Membership.RequireAdmin(ctx, userID); e != nil {
 		return ReviewMetrics{}, e
 	}
 	var rows []struct {

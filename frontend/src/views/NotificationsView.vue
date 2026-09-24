@@ -45,8 +45,10 @@ onMounted(load);
             class="card"
             :class="{ unread: !item.read_at }"
         >
-            <h3>发布了新作业：{{ item.payload.title }}</h3>
-            <p>官方截止：{{ formatDate(item.payload.official_due_at) }}</p>
+            <h3 v-if="item.kind === 'assignment_retracted'">作业已撤回：{{ item.payload.title }}</h3>
+            <h3 v-else-if="item.kind === 'assignment_updated'">作业已修改：{{ item.payload.title }}</h3>
+            <h3 v-else>发布了新作业：{{ item.payload.title }}</h3>
+            <p v-if="item.kind !== 'assignment_retracted'">官方截止：{{ formatDate(item.payload.official_due_at) }}</p>
             <small>{{ formatDate(item.created_at) }}</small
             ><button v-if="!item.read_at" @click="read(item)">标为已读</button>
         </article>

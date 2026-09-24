@@ -11,13 +11,45 @@ export type Assignment = {
   effective_due_at: string | null;
   completion_status: "todo" | "completed";
 };
+export type PageResult<T> = { data: T[] | null; next_cursor: string | null };
+export type AdminAssignment = {
+  id: string;
+  course_instance_id: string;
+  course_name: string;
+  term: string;
+  title: string;
+  description: string;
+  official_due_at: string | null;
+  submission_method: string | null;
+  status: "published" | "cancelled";
+  source_type: string | null;
+  original_filename: string | null;
+  evidence: string | null;
+};
+export type SourceIssue = {
+  id: string;
+  course_instance_id: string;
+  course_name: string;
+  original_filename: string | null;
+  submitter_name: string;
+  status: string;
+  stage: string;
+  error_message: string | null;
+  created_at: string;
+};
 export type Course = {
   id: string;
   course_name: string;
   term: string;
   teacher_name: string | null;
   timezone: string;
-  my_role: "maintainer" | "student";
+  status: "active" | "archived";
+  joined: boolean;
+};
+export type CurrentUser = {
+  id: string;
+  display_name: string;
+  role: "admin" | "user";
 };
 export type Meeting = {
   course_instance_id: string;
@@ -39,7 +71,7 @@ export const arrayOrEmpty = <T>(value: T[] | null | undefined): T[] =>
   value ?? [];
 export type Notification = {
   id: string;
-  kind: "assignment_published";
+  kind: "assignment_published" | "assignment_updated" | "assignment_retracted";
   payload: {
     assignment_id: string;
     course_instance_id: string;

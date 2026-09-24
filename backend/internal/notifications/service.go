@@ -19,10 +19,20 @@ type Item struct {
 	CreatedAt time.Time       `json:"created_at"`
 }
 
-// AssignmentPublished writes one in-app notification per active course member.
-// It intentionally executes in the caller transaction, so a failed publication
-// never produces a phantom notification.
+// 作业通知与共享内容变更处于同一事务，避免出现内容未变更但通知已发出的情况。
 func (s Service) AssignmentPublished(ctx context.Context, tx *gorm.DB, assignment shared.Assignment) error {
+	return s.assignmentEvent(ctx, tx, assignment, "assignment_published")
+}
+
+func (s Service) AssignmentUpdated(ctx context.Context, tx *gorm.DB, assignment shared.Assignment) error {
+	return s.assignmentEvent(ctx, tx, assignment, "assignment_updated")
+}
+
+func (s Service) AssignmentRetracted(ctx context.Context, tx *gorm.DB, assignment shared.Assignment) error {
+	return s.assignmentEvent(ctx, tx, assignment, "assignment_retracted")
+}
+
+func (s Service) assignmentEvent(ctx context.Context, tx *gorm.DB, assignment shared.Assignment, kind string) error {
 	var userIDs []uuid.UUID
 	if err := tx.WithContext(ctx).Model(&shared.Enrollment{}).Where("course_instance_id=? AND status='active'", assignment.CourseInstanceID).Pluck("user_id", &userIDs).Error; err != nil {
 		return err
@@ -32,7 +42,7 @@ func (s Service) AssignmentPublished(ctx context.Context, tx *gorm.DB, assignmen
 		return err
 	}
 	for _, userID := range userIDs {
-		n := shared.Notification{UserID: userID, Kind: "assignment_published", Payload: string(payload)}
+		n := shared.Notification{UserID: userID, Kind: kind, Payload: string(payload)}
 		if err := tx.WithContext(ctx).Create(&n).Error; err != nil {
 			return err
 		}

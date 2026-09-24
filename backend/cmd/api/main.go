@@ -26,7 +26,12 @@ func main() {
 	queue := asynq.NewClient(shared.RedisOpt())
 	cs := courses.Service{DB: db}
 	ns := notifications.Service{DB: db}
-	as := assignments.Service{DB: db, Membership: cs, PublishNotification: ns.AssignmentPublished}
+	as := assignments.Service{
+		DB: db, Membership: cs,
+		PublishNotification: ns.AssignmentPublished,
+		UpdateNotification:  ns.AssignmentUpdated,
+		RetractNotification: ns.AssignmentRetracted,
+	}
 	in := ingestion.Service{DB: db, Membership: cs, Queue: queue, Extractor: ingestion.NewConfiguredExtractor(), Files: shared.NewTemporaryFiles()}
 	r := gin.New()
 	r.Use(shared.RequestLog(), shared.SafeRecovery(), devCORS())
@@ -34,6 +39,10 @@ func main() {
 	r.OPTIONS("/*path", func(c *gin.Context) { c.Status(http.StatusNoContent) })
 	api := r.Group("/api/v1")
 	api.Use(identity.HeaderIdentity(db))
+	api.GET("/me", func(c *gin.Context) {
+		u := identity.Current(c)
+		c.JSON(200, gin.H{"id": u.ID, "display_name": u.DisplayName, "role": u.Role})
+	})
 	api.POST("/course-instances", func(c *gin.Context) {
 		var x courses.CreateInstanceInput
 		if c.ShouldBindJSON(&x) != nil {
@@ -44,43 +53,48 @@ func main() {
 		respond(c, v, e, 201)
 	})
 	api.GET("/course-instances", func(c *gin.Context) {
-		u := identity.Current(c)
-		type courseItem struct {
-			ID          uuid.UUID `json:"id"`
-			CourseName  string    `json:"course_name"`
-			Term        string    `json:"term"`
-			TeacherName *string   `json:"teacher_name"`
-			Timezone    string    `json:"timezone"`
-			MyRole      string    `json:"my_role"`
-		}
-		var rows []courseItem
-		e := db.Table("course_instances ci").Select("ci.id,c.name AS course_name,ci.term,ci.teacher_name,ci.timezone,e.role AS my_role").Joins("JOIN courses c ON c.id=ci.course_id").Joins("JOIN enrollments e ON e.course_instance_id=ci.id").Where("e.user_id=? AND e.status='active'", u.ID).Order("ci.term DESC,c.name ASC").Scan(&rows).Error
-		respond(c, gin.H{"data": rows, "next_cursor": nil}, e, 200)
+		v, e := cs.ListInstances(c, identity.Current(c).ID, false)
+		respond(c, gin.H{"data": v, "next_cursor": nil}, e, 200)
 	})
-	api.POST("/course-instances/:id/enrollments", func(c *gin.Context) {
+	api.GET("/me/course-instances", func(c *gin.Context) {
+		v, e := cs.ListInstances(c, identity.Current(c).ID, true)
+		respond(c, gin.H{"data": v, "next_cursor": nil}, e, 200)
+	})
+	api.PUT("/course-instances/:id/enrollment", func(c *gin.Context) {
 		ci, e := id(c)
 		if e != nil {
 			bad(c)
 			return
 		}
-		if e = cs.RequireMaintainer(c, identity.Current(c).ID, ci); e != nil {
-			shared.RespondError(c, e)
-			return
-		}
-		var x struct {
-			UserID uuid.UUID `json:"user_id"`
-			Role   string    `json:"role"`
-		}
-		if c.ShouldBindJSON(&x) != nil || x.UserID == uuid.Nil {
+		e = cs.SetEnrollment(c, identity.Current(c).ID, ci, true)
+		respond(c, gin.H{"joined": true}, e, 200)
+	})
+	api.DELETE("/course-instances/:id/enrollment", func(c *gin.Context) {
+		ci, e := id(c)
+		if e != nil {
 			bad(c)
 			return
 		}
-		if x.Role == "" {
-			x.Role = "student"
+		e = cs.SetEnrollment(c, identity.Current(c).ID, ci, false)
+		respond(c, gin.H{"joined": false}, e, 200)
+	})
+	api.GET("/admin/course-instances", func(c *gin.Context) {
+		v, e := cs.ListAllInstances(c, identity.Current(c).ID)
+		respond(c, gin.H{"data": v, "next_cursor": nil}, e, 200)
+	})
+	api.PATCH("/course-instances/:id", func(c *gin.Context) {
+		ci, e := id(c)
+		if e != nil {
+			bad(c)
+			return
 		}
-		row := shared.Enrollment{UserID: x.UserID, CourseInstanceID: ci, Role: x.Role, Status: "active"}
-		e = db.Create(&row).Error
-		respond(c, row, e, 201)
+		var x courses.UpdateInstanceInput
+		if c.ShouldBindJSON(&x) != nil {
+			bad(c)
+			return
+		}
+		v, e := cs.UpdateInstance(c, identity.Current(c).ID, ci, x)
+		respond(c, v, e, 200)
 	})
 	api.GET("/course-instances/:id/enrollments", func(c *gin.Context) {
 		ci, e := id(c)
@@ -90,25 +104,6 @@ func main() {
 		}
 		v, e := cs.ListEnrollments(c, identity.Current(c).ID, ci)
 		respond(c, gin.H{"data": v, "next_cursor": nil}, e, 200)
-	})
-	api.PATCH("/course-instances/:id/enrollments/:enrollmentId", func(c *gin.Context) {
-		ci, e := id(c)
-		if e != nil {
-			bad(c)
-			return
-		}
-		enrollmentID, e := uuid.Parse(c.Param("enrollmentId"))
-		if e != nil {
-			bad(c)
-			return
-		}
-		var x courses.UpdateEnrollmentInput
-		if c.ShouldBindJSON(&x) != nil {
-			bad(c)
-			return
-		}
-		v, e := cs.UpdateEnrollment(c, identity.Current(c).ID, ci, enrollmentID, x)
-		respond(c, v, e, 200)
 	})
 	api.PUT("/course-instances/:id/meetings", func(c *gin.Context) {
 		ci, e := id(c)
@@ -124,13 +119,36 @@ func main() {
 		v, e := cs.PutMeetings(c, identity.Current(c).ID, ci, x)
 		respond(c, v, e, 200)
 	})
+	api.GET("/course-instances/:id/meetings", func(c *gin.Context) {
+		ci, e := id(c)
+		if e != nil {
+			bad(c)
+			return
+		}
+		v, e := cs.ListMeetings(c, identity.Current(c).ID, ci)
+		respond(c, gin.H{"data": v, "next_cursor": nil}, e, 200)
+	})
 	api.GET("/me/schedule", func(c *gin.Context) {
 		v, e := cs.ListSchedule(c, identity.Current(c).ID)
 		respond(c, gin.H{"data": v, "next_cursor": nil}, e, 200)
 	})
 	api.GET("/me/assignments", func(c *gin.Context) {
-		v, e := as.ListMine(c, identity.Current(c).ID, c.DefaultQuery("bucket", "all"))
+		courseID, e := optionalCourseID(c)
+		if e != nil {
+			shared.RespondError(c, e)
+			return
+		}
+		v, e := as.ListMine(c, identity.Current(c).ID, c.DefaultQuery("bucket", "all"), courseID)
 		respond(c, gin.H{"data": v, "next_cursor": nil}, e, 200)
+	})
+	api.GET("/admin/assignments", func(c *gin.Context) {
+		courseID, limit, e := listParams(c)
+		if e != nil {
+			shared.RespondError(c, e)
+			return
+		}
+		v, next, e := as.ListAdmin(c, identity.Current(c).ID, c.DefaultQuery("status", "published"), courseID, limit, c.Query("cursor"))
+		respond(c, gin.H{"data": v, "next_cursor": next}, e, 200)
 	})
 	api.GET("/me/notifications", func(c *gin.Context) {
 		v, e := ns.ListMine(c, identity.Current(c).ID)
@@ -171,6 +189,15 @@ func main() {
 			return
 		}
 		v, e := as.UpdatePublished(c, identity.Current(c).ID, aid, x)
+		respond(c, v, e, 200)
+	})
+	api.POST("/assignments/:id/retract", func(c *gin.Context) {
+		aid, e := id(c)
+		if e != nil {
+			bad(c)
+			return
+		}
+		v, e := as.Retract(c, identity.Current(c).ID, aid)
 		respond(c, v, e, 200)
 	})
 	api.PUT("/assignments/:id/my-state", func(c *gin.Context) {
@@ -235,7 +262,7 @@ func main() {
 		var s shared.SourceItem
 		db.First(&s, "id=?", j.SourceItemID)
 		if s.SubmittedBy != identity.Current(c).ID {
-			if e = cs.RequireMaintainer(c, identity.Current(c).ID, s.CourseInstanceID); e != nil {
+			if e = cs.RequireAdmin(c, identity.Current(c).ID); e != nil {
 				shared.RespondError(c, e)
 				return
 			}
@@ -272,7 +299,7 @@ func main() {
 			bad(c)
 			return
 		}
-		if e = cs.RequireMaintainer(c, identity.Current(c).ID, ci); e != nil {
+		if e = cs.RequireAdmin(c, identity.Current(c).ID); e != nil {
 			shared.RespondError(c, e)
 			return
 		}
@@ -289,6 +316,46 @@ func main() {
 		}
 		v, e := in.ReviewMetrics(c, identity.Current(c).ID, ci)
 		respond(c, v, e, 200)
+	})
+	api.GET("/admin/assignment-candidates", func(c *gin.Context) {
+		courseID, limit, e := listParams(c)
+		if e != nil {
+			shared.RespondError(c, e)
+			return
+		}
+		v, next, e := as.ListPending(c, identity.Current(c).ID, courseID, limit, c.Query("cursor"))
+		respond(c, gin.H{"data": v, "next_cursor": next}, e, 200)
+	})
+	api.GET("/admin/source-issues", func(c *gin.Context) {
+		courseID, limit, e := listParams(c)
+		if e != nil {
+			shared.RespondError(c, e)
+			return
+		}
+		v, next, e := in.ListAdminIssues(c, identity.Current(c).ID, courseID, limit, c.Query("cursor"))
+		respond(c, gin.H{"data": v, "next_cursor": next}, e, 200)
+	})
+	api.GET("/course-instances/:id/assignments", func(c *gin.Context) {
+		ci, e := id(c)
+		if e != nil {
+			bad(c)
+			return
+		}
+		v, e := as.ListCourse(c, identity.Current(c).ID, ci)
+		respond(c, gin.H{"data": v, "next_cursor": nil}, e, 200)
+	})
+	api.GET("/me/sources", func(c *gin.Context) {
+		v, e := in.ListMine(c, identity.Current(c).ID)
+		respond(c, gin.H{"data": v, "next_cursor": nil}, e, 200)
+	})
+	api.GET("/course-instances/:id/sources", func(c *gin.Context) {
+		ci, e := id(c)
+		if e != nil {
+			bad(c)
+			return
+		}
+		v, e := in.ListCourseSources(c, identity.Current(c).ID, ci)
+		respond(c, gin.H{"data": v, "next_cursor": nil}, e, 200)
 	})
 	addr := os.Getenv("HTTP_ADDR")
 	if addr == "" {
@@ -319,6 +386,25 @@ func devCORS() gin.HandlerFunc {
 	}
 }
 func id(c *gin.Context) (uuid.UUID, error) { return uuid.Parse(c.Param("id")) }
+func optionalCourseID(c *gin.Context) (*uuid.UUID, error) {
+	raw := c.Query("course_instance_id")
+	if raw == "" {
+		return nil, nil
+	}
+	id, err := uuid.Parse(raw)
+	if err != nil {
+		return nil, shared.JSONError("shared.invalid_course", "课程筛选无效", 400)
+	}
+	return &id, nil
+}
+func listParams(c *gin.Context) (*uuid.UUID, int, error) {
+	id, err := optionalCourseID(c)
+	if err != nil {
+		return nil, 0, err
+	}
+	limit, err := shared.PageLimit(c.Query("limit"))
+	return id, limit, err
+}
 func bad(c *gin.Context) {
 	shared.RespondError(c, shared.JSONError("shared.invalid_request", "请求参数不合法", 400))
 }

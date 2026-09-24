@@ -4,7 +4,26 @@ import type { Assignment } from "../types";
 import { formatDate } from "../types";
 
 const props = defineProps<{ assignment: Assignment }>();
-defineEmits<{ toggle: [assignment: Assignment] }>();
+const emit = defineEmits<{
+    toggle: [assignment: Assignment];
+    plan: [assignment: Assignment, value: string | null];
+}>();
+const editingPlan = ref(false);
+const planValue = ref("");
+function editPlan() {
+    const value = props.assignment.personal_due_at;
+    if (value) {
+        const date = new Date(value);
+        planValue.value = new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+    } else {
+        planValue.value = "";
+    }
+    editingPlan.value = true;
+}
+function savePlan() {
+    emit("plan", props.assignment, planValue.value ? new Date(planValue.value).toISOString() : null);
+    editingPlan.value = false;
+}
 
 const now = ref(Date.now());
 let clock: ReturnType<typeof setInterval> | undefined;
@@ -71,6 +90,7 @@ const submissionNote = computed(() => {
         </p>
         <div class="assignment-card__details">
             <p>官方截止：{{ formatDate(assignment.official_due_at) }}</p>
+            <p class="source-note">根据老师通知整理，经管理员核对发布。</p>
             <p v-if="assignment.personal_due_at" class="personal-due">
                 个人计划：{{ formatDate(assignment.personal_due_at) }}
             </p>
@@ -83,6 +103,13 @@ const submissionNote = computed(() => {
             <button class="secondary" @click="$emit('toggle', assignment)">
                 {{ assignment.completion_status === "completed" ? "恢复待办" : "标记完成" }}
             </button>
+            <button class="secondary" @click="editPlan">设置个人计划</button>
         </div>
+        <form v-if="editingPlan" class="plan-editor" @submit.prevent="savePlan">
+            <label>个人计划截止时间<input v-model="planValue" type="datetime-local" /></label>
+            <button type="submit">保存计划</button>
+            <button class="secondary" type="button" @click="editingPlan = false">取消</button>
+            <p>留空后沿用官方截止时间。</p>
+        </form>
     </article>
 </template>
