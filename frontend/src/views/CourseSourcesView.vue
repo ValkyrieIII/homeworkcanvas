@@ -101,12 +101,12 @@ onMounted(loadSources);
 watch(() => props.courseId, loadSources);
 </script>
 <template>
-    <div class="source-import">
+    <div>
         <h2>来源导入</h2>
         <p>导入只会生成待审核候选；原始文件和页面预览在处理结束后自动删除。</p>
         <p v-if="error" class="error">{{ error }}</p>
         <p v-if="message" class="notice">{{ message }}</p>
-        <section class="card">
+        <section class="card admin-form">
             <h3>导入老师通知</h3>
             <p>可填写文字、选择附件，或两者一起提交。附件支持 PDF / PPT / PPTX，单个不超过 25MB。</p>
             <label for="source-message">通知文字</label>
@@ -129,7 +129,7 @@ watch(() => props.courseId, loadSources);
                 {{ sending ? "正在提交…" : "导入并生成候选" }}
             </button>
         </section>
-        <section v-if="job" class="card job-card">
+        <section v-if="job" class="card">
             <h3>处理进度</h3>
             <p>处理状态：{{ statusLabel[job.status] || job.status }}</p>
             <p v-if="job.error_message" class="error">

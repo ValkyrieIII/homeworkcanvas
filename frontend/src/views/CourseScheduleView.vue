@@ -36,6 +36,7 @@ onMounted(load);
             :key="`${m.weekday}-${m.start_time}`"
             class="card"
         >
+            <small>{{ m.course_name }} · {{ m.term }}</small>
             <h3>周{{ m.weekday }} {{ m.start_time }}–{{ m.end_time }}</h3>
             <p>{{ m.location || "地点待确认" }}</p>
         </article>

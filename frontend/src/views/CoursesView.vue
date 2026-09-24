@@ -47,8 +47,8 @@ onMounted(load);
         <h1>选择参与的课程</h1>
         <p>加入后，课程作业和课表会出现在你的个人视图中。</p>
         <div class="tabs" aria-label="课程筛选">
-            <button class="secondary" :class="{ active: !mineOnly }" @click="mineOnly = false">全部课程</button>
-            <button class="secondary" :class="{ active: mineOnly }" @click="mineOnly = true">我已加入</button>
+            <button class="tab-button" :class="{ active: !mineOnly }" @click="mineOnly = false">全部课程</button>
+            <button class="tab-button" :class="{ active: mineOnly }" @click="mineOnly = true">我已加入</button>
         </div>
         <LoadState :loading="loading" :error="error" :empty="!visibleCourses.length" :empty-text="mineOnly ? '尚未加入课程。' : '暂无可加入课程。'" />
         <article v-for="course in visibleCourses" :key="course.id" class="card course-link">

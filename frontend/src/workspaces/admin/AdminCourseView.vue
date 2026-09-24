@@ -3,6 +3,7 @@ import { onMounted, ref, watch } from "vue";
 import { api } from "../../api";
 import { arrayOrEmpty, formatDate, type Course } from "../../types";
 import AdminAssignmentForm from "../../components/AdminAssignmentForm.vue";
+import SelectMenu from "../../components/SelectMenu.vue";
 
 type Meeting = { id?: string; weekday: number; start_time: string; end_time: string; location: string | null };
 type Assignment = {
@@ -34,6 +35,15 @@ const sourceStatus: Record<string, string> = {
     queued: "排队中", processing: "处理中", review_ready: "待审核",
     completed: "已完成", failed: "处理失败",
 };
+const statusOptions = [
+    { value: "active", label: "开放" },
+    { value: "archived", label: "归档" },
+];
+const weekdayOptions = Array.from({ length: 7 }, (_, index) => ({ value: index + 1, label: `周${index + 1}` }));
+
+function setStatus(value: string | number) {
+    if (value === "active" || value === "archived") status.value = value;
+}
 
 async function load() {
     error.value = "";
@@ -129,7 +139,14 @@ onMounted(load);
                     <label>课程名称<input v-model="name" required /></label>
                     <label>学期<input v-model="term" required /></label>
                     <label>任课教师<input v-model="teacher" /></label>
-                    <label>状态<select v-model="status"><option value="active">开放</option><option value="archived">归档</option></select></label>
+                    <div class="form-field">状态
+                        <SelectMenu
+                            :model-value="status"
+                            :options="statusOptions"
+                            label="状态"
+                            @update:model-value="setStatus"
+                        />
+                    </div>
                 </div>
                 <button :disabled="busy || !name.trim() || !term.trim()">保存课程资料</button>
             </form>
@@ -137,7 +154,14 @@ onMounted(load);
                 <h2>上课安排</h2>
                 <p v-if="!meetings.length">暂无上课安排。</p>
                 <div v-for="(item, index) in meetings" :key="index" class="meeting-row">
-                    <label>星期<select v-model.number="item.weekday"><option v-for="day in 7" :key="day" :value="day">周{{ day }}</option></select></label>
+                    <div class="form-field">星期
+                        <SelectMenu
+                            :model-value="item.weekday"
+                            :options="weekdayOptions"
+                            label="星期"
+                            @update:model-value="(value) => (item.weekday = Number(value))"
+                        />
+                    </div>
                     <label>开始<input v-model="item.start_time" type="time" required /></label>
                     <label>结束<input v-model="item.end_time" type="time" required /></label>
                     <label>地点<input v-model="item.location" /></label>

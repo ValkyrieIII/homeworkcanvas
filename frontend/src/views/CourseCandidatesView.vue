@@ -127,14 +127,12 @@ onMounted(() => { void load(); });
             <p>来源：{{ c.original_filename || (c.source_type === "text" ? "老师文字通知" : "附件") }}</p>
             <template v-if="editing[c.id] && drafts[c.id]">
                 <h3>编辑候选作业</h3>
-                <label :for="`title-${c.id}`">标题</label>
-                <input :id="`title-${c.id}`" v-model="drafts[c.id].title" class="edit-input" />
-                <label :for="`description-${c.id}`">作业说明</label>
-                <textarea :id="`description-${c.id}`" v-model="drafts[c.id].description" />
-                <label :for="`due-${c.id}`">官方截止时间（留空表示待确认）</label>
-                <input :id="`due-${c.id}`" v-model="drafts[c.id].due" class="edit-input" type="datetime-local" />
-                <label :for="`submission-${c.id}`">提交方式</label>
-                <input :id="`submission-${c.id}`" v-model="drafts[c.id].submission" class="edit-input" />
+                <div class="admin-form">
+                    <label>标题<input v-model="drafts[c.id].title" /></label>
+                    <label>作业说明<textarea v-model="drafts[c.id].description" /></label>
+                    <label>官方截止时间（留空表示待确认）<input v-model="drafts[c.id].due" type="datetime-local" /></label>
+                    <label>提交方式<input v-model="drafts[c.id].submission" /></label>
+                </div>
             </template>
             <template v-else>
                 <h3>{{ c.title }}</h3>

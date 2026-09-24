@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { api } from "../api";
 import { arrayOrEmpty, type Assignment, type Course } from "../types";
 import AssignmentCard from "../components/AssignmentCard.vue";
 import LoadState from "../components/LoadState.vue";
+import SelectMenu from "../components/SelectMenu.vue";
 import { useAssignmentState } from "../composables/useAssignmentState";
 const route = useRoute(),
     router = useRouter(),
@@ -12,6 +13,13 @@ const route = useRoute(),
     courses = ref<Course[]>([]),
     loading = ref(false),
     error = ref("");
+const courseOptions = computed(() => [
+    { value: "", label: "全部已加入课程" },
+    ...courses.value.map((course) => ({
+        value: course.id,
+        label: `${course.course_name} · ${course.term}`,
+    })),
+]);
 const buckets = [
     ["upcoming", "即将截止"],
     ["overdue", "已逾期"],
@@ -24,6 +32,12 @@ const bucket = () =>
         ? route.query.bucket
         : "upcoming";
 const courseId = () => typeof route.query.course === "string" ? route.query.course : "";
+function setCourse(value: string | number) {
+    void router.push({
+        path: "/assignments",
+        query: { bucket: bucket(), course: String(value) || undefined },
+    });
+}
 async function loadCourses() {
     try {
         courses.value = arrayOrEmpty((await api<{ data: Course[] | null }>("/me/course-instances")).data);
@@ -54,18 +68,18 @@ onMounted(() => { void loadCourses(); void load(); });
 </script>
 <template>
     <section>
-        <div class="page-heading">
-            <div>
-                <p class="eyebrow">我的作业</p>
-                <h1>跨课程作业</h1>
-            </div>
+        <div>
+            <p class="eyebrow">我的作业</p>
+            <h1>跨课程作业</h1>
         </div>
-        <label class="filter-label">课程
-            <select :value="courseId()" @change="router.push({ path: '/assignments', query: { bucket: bucket(), course: ($event.target as HTMLSelectElement).value || undefined } })">
-                <option value="">全部已加入课程</option>
-                <option v-for="course in courses" :key="course.id" :value="course.id">{{ course.course_name }} · {{ course.term }}</option>
-            </select>
-        </label>
+        <div class="filter-label">课程
+            <SelectMenu
+                :model-value="courseId()"
+                :options="courseOptions"
+                label="课程"
+                @update:model-value="setCourse"
+            />
+        </div>
         <div class="tabs">
             <RouterLink
                 v-for="[key, label] in buckets"

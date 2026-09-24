@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import { api } from "../api";
+import SelectMenu from "./SelectMenu.vue";
 import type { AdminAssignment, Course } from "../types";
 
 type EditableAssignment = Pick<AdminAssignment, "id" | "title" | "description" | "official_due_at" | "submission_method">;
@@ -17,6 +18,10 @@ const due = ref("");
 const submission = ref("");
 const busy = ref(false);
 const error = ref("");
+const courseOptions = computed(() => [
+  { value: "", label: "请选择课程" },
+  ...(props.courses ?? []).map((course) => ({ value: course.id, label: `${course.course_name} · ${course.term}` })),
+]);
 
 function localDate(value: string | null | undefined) {
   if (!value) return "";
@@ -64,12 +69,14 @@ async function save() {
     <p>官方截止时间来自老师通知，个人计划由学生自行维护。</p>
     <p v-if="error" class="error" role="alert">{{ error }}</p>
     <div class="form-grid">
-      <label v-if="!assignment && !courseId">所属课程
-        <select v-model="selectedCourse" required>
-          <option value="">请选择课程</option>
-          <option v-for="course in courses" :key="course.id" :value="course.id">{{ course.course_name }} · {{ course.term }}</option>
-        </select>
-      </label>
+      <div v-if="!assignment && !courseId" class="form-field">所属课程
+        <SelectMenu
+          :model-value="selectedCourse"
+          :options="courseOptions"
+          label="所属课程"
+          @update:model-value="(value) => (selectedCourse = String(value))"
+        />
+      </div>
       <label>标题<input v-model="title" required /></label>
       <label>官方截止<input v-model="due" type="datetime-local" /></label>
       <label>提交方式<input v-model="submission" /></label>

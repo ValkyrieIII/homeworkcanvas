@@ -4,6 +4,7 @@ import { useRoute, useRouter } from "vue-router";
 import { api } from "../../api";
 import AdminAssignmentForm from "../../components/AdminAssignmentForm.vue";
 import LoadState from "../../components/LoadState.vue";
+import SelectMenu from "../../components/SelectMenu.vue";
 import { arrayOrEmpty, formatDate, type AdminAssignment, type Course, type PageResult, type SourceIssue } from "../../types";
 import CourseCandidatesView from "../../views/CourseCandidatesView.vue";
 
@@ -27,6 +28,10 @@ let assignmentRequest = 0;
 let issueRequest = 0;
 const tab = computed(() => route.query.tab === "published" || route.query.tab === "cancelled" ? route.query.tab : "pending");
 const courseId = computed(() => typeof route.query.course === "string" ? route.query.course : "");
+const courseOptions = computed(() => [
+  { value: "", label: "全部课程" },
+  ...courses.value.map((course) => ({ value: course.id, label: `${course.course_name} · ${course.term}` })),
+]);
 
 function setQuery(nextTab: string, nextCourse = courseId.value) {
   void router.push({ path: "/admin", query: { tab: nextTab === "pending" ? undefined : nextTab, course: nextCourse || undefined } });
@@ -140,12 +145,14 @@ onMounted(() => { void loadCourses(); void loadAssignments(); void loadIssues();
     <p v-if="message" class="notice" role="status">{{ message }}</p>
     <p v-if="error" class="error" role="alert">{{ error }}</p>
     <div class="workbench-toolbar">
-      <label class="filter-label">课程
-        <select :value="courseId" @change="setQuery(tab, ($event.target as HTMLSelectElement).value)">
-          <option value="">全部课程</option>
-          <option v-for="course in courses" :key="course.id" :value="course.id">{{ course.course_name }} · {{ course.term }}</option>
-        </select>
-      </label>
+      <div class="filter-label">课程
+        <SelectMenu
+          :model-value="courseId"
+          :options="courseOptions"
+          label="课程"
+          @update:model-value="(value) => setQuery(tab, String(value))"
+        />
+      </div>
       <button type="button" @click="showCreate = !showCreate">{{ showCreate ? "收起发布表单" : "手工发布作业" }}</button>
     </div>
     <AdminAssignmentForm v-if="showCreate" :courses="courses" @saved="saved" />
@@ -157,7 +164,7 @@ onMounted(() => { void loadCourses(); void loadAssignments(); void loadIssues();
     <CourseCandidatesView v-if="tab === 'pending'" :course-id="courseId || undefined" embedded />
     <template v-else>
       <LoadState :loading="loading" :error="''" :empty="!assignments.length && !error" :empty-text="tab === 'published' ? '暂无已发布作业。' : '暂无已撤回作业。'" />
-      <article v-for="item in assignments" :key="item.id" class="card admin-assignment-card">
+      <article v-for="item in assignments" :key="item.id" class="card assignment-card admin-assignment-card" :class="item.status === 'cancelled' ? 'assignment-card--undated' : ''">
         <div class="assignment-card__top">
           <RouterLink :to="`/admin/courses/${item.course_instance_id}`">{{ item.course_name }} · {{ item.term }}</RouterLink>
           <span class="assignment-card__badge">{{ item.status === 'cancelled' ? '已撤回' : '已发布' }}</span>
