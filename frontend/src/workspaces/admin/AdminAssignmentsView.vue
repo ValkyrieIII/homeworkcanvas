@@ -32,6 +32,11 @@ const courseOptions = computed(() => [
   { value: "", label: "全部课程" },
   ...courses.value.map((course) => ({ value: course.id, label: `${course.course_name} · ${course.term}` })),
 ]);
+const tabs = [
+  { key: "pending", label: "待审核" },
+  { key: "published", label: "已发布" },
+  { key: "cancelled", label: "已撤回" },
+] as const;
 
 function setQuery(nextTab: string, nextCourse = courseId.value) {
   void router.push({ path: "/admin", query: { tab: nextTab === "pending" ? undefined : nextTab, course: nextCourse || undefined } });
@@ -157,8 +162,9 @@ onMounted(() => { void loadCourses(); void loadAssignments(); void loadIssues();
     </div>
     <AdminAssignmentForm v-if="showCreate" :courses="courses" @saved="saved" />
     <nav class="tabs" aria-label="作业工作台视图">
-      <button v-for="item in [{ key: 'pending', label: '待审核' }, { key: 'published', label: '已发布' }, { key: 'cancelled', label: '已撤回' }]"
-        :key="item.key" class="tab-button" :class="{ active: tab === item.key }" @click="setQuery(item.key)">{{ item.label }}</button>
+      <RouterLink v-for="item in tabs" :key="item.key"
+        :to="{ path: '/admin', query: { tab: item.key === 'pending' ? undefined : item.key, course: courseId || undefined } }"
+        :class="{ active: tab === item.key }">{{ item.label }}</RouterLink>
     </nav>
 
     <CourseCandidatesView v-if="tab === 'pending'" :course-id="courseId || undefined" embedded />

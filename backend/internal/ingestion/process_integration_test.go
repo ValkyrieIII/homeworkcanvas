@@ -88,14 +88,14 @@ func TestProcessStateTransitions(t *testing.T) {
 	if err := tx.Create(&course).Error; err != nil {
 		t.Fatal(err)
 	}
-	instance := shared.CourseInstance{CourseID: course.ID, Term: "2026-fall", Timezone: "Asia/Shanghai", Status: "active", CreatedBy: user.ID}
+	instance := shared.CourseInstance{CourseID: course.ID, TermYear: 2026, TermSeason: "秋", Timezone: "Asia/Shanghai", Status: "active", CreatedBy: user.ID}
 	if err := tx.Create(&instance).Error; err != nil {
 		t.Fatal(err)
 	}
 
 	makeJob := func(text string) (shared.SourceItem, shared.IngestionJob) {
 		t.Helper()
-		src := shared.SourceItem{CourseInstanceID: instance.ID, SubmittedBy: user.ID, SourceType: "text", RawText: &text, Status: "queued"}
+		src := shared.SourceItem{CourseInstanceID: &instance.ID, SubmittedBy: user.ID, SourceType: "text", RawText: &text, Status: "queued"}
 		if err := tx.Create(&src).Error; err != nil {
 			t.Fatal(err)
 		}
@@ -126,7 +126,7 @@ func TestProcessStateTransitions(t *testing.T) {
 	}
 
 	message, filename := "Teacher message: the report is due Friday.", "homework.pdf"
-	fileSource := shared.SourceItem{CourseInstanceID: instance.ID, SubmittedBy: user.ID, SourceType: "file", RawText: &message, OriginalFilename: &filename, Status: "queued"}
+	fileSource := shared.SourceItem{CourseInstanceID: &instance.ID, SubmittedBy: user.ID, SourceType: "file", RawText: &message, OriginalFilename: &filename, Status: "queued"}
 	if err := tx.Create(&fileSource).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +172,7 @@ func TestProcessStateTransitions(t *testing.T) {
 
 	checksum := "same-content-checksum"
 	newFile := func(submittedBy uuid.UUID) (shared.SourceItem, shared.IngestionJob) {
-		return shared.SourceItem{CourseInstanceID: instance.ID, SubmittedBy: submittedBy, SourceType: "file", Checksum: &checksum, Status: "queued"},
+		return shared.SourceItem{CourseInstanceID: &instance.ID, SubmittedBy: submittedBy, SourceType: "file", Checksum: &checksum, Status: "queued"},
 			shared.IngestionJob{Base: shared.Base{ID: uuid.New()}, Stage: "queued", Status: "queued", MaxAttempts: 3}
 	}
 	firstSource, firstJob := newFile(user.ID)

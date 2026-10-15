@@ -45,11 +45,11 @@ func TestAcceptEditedCandidateClearsDueDate(t *testing.T) {
 		t.Fatal(err)
 	}
 	member := courses.Service{DB: tx}
-	instance, err := member.CreateInstance(context.Background(), user.ID, courses.CreateInstanceInput{CourseName: "Review Course", Term: "2026-fall"})
+	instance, err := member.CreateInstance(context.Background(), user.ID, courses.CreateInstanceInput{CourseName: "Review Course", TermYear: 2026, TermSeason: "秋"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	source := shared.SourceItem{CourseInstanceID: instance.ID, SubmittedBy: user.ID, SourceType: "text", Status: "review_ready"}
+	source := shared.SourceItem{CourseInstanceID: &instance.ID, SubmittedBy: user.ID, SourceType: "text", Status: "review_ready"}
 	if err := tx.Create(&source).Error; err != nil {
 		t.Fatal(err)
 	}

@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { api } from "../../api";
-import { arrayOrEmpty, type Course } from "../../types";
+import { arrayOrEmpty, parseTermValue, termOptions, type Course } from "../../types";
 import LoadState from "../../components/LoadState.vue";
+import SelectMenu from "../../components/SelectMenu.vue";
 
 const router = useRouter();
 const courses = ref<Course[]>([]);
@@ -13,6 +14,12 @@ const error = ref("");
 const name = ref("");
 const term = ref("");
 const teacher = ref("");
+// 学期是枚举，不该靠手打：选项 = 库里已有学期 + 从当前学期起的 4 个学期。
+const termChoices = computed(() => termOptions(courses.value.map((course) => ({ term_year: course.term_year, term_season: course.term_season }))));
+
+function setTerm(value: string | number) {
+    term.value = String(value);
+}
 
 async function load() {
     loading.value = true;
@@ -32,7 +39,7 @@ async function create() {
     try {
         const result = await api<{ id: string }>("/course-instances", {
             method: "POST",
-            body: JSON.stringify({ course_name: name.value.trim(), term: term.value.trim(), teacher_name: teacher.value.trim() || null }),
+            body: JSON.stringify({ course_name: name.value.trim(), ...parseTermValue(term.value), teacher_name: teacher.value.trim() || null }),
         });
         await router.push(`/admin/courses/${result.id}`);
     } catch (e: any) {
@@ -54,13 +61,21 @@ onMounted(load);
             <h2>创建课程</h2>
             <div class="form-grid">
                 <label>课程名称<input v-model="name" required placeholder="例如：软件测试" /></label>
-                <label>学期<input v-model="term" required placeholder="例如：2026 秋季学期" /></label>
+                <div class="form-field">学期
+                    <SelectMenu
+                        :model-value="term"
+                        :options="termChoices"
+                        label="学期"
+                        placeholder="请选择学期"
+                        @update:model-value="setTerm"
+                    />
+                </div>
                 <label>任课教师<input v-model="teacher" placeholder="选填" /></label>
             </div>
             <button type="submit" :disabled="saving || !name.trim() || !term.trim()">{{ saving ? "创建中…" : "创建课程" }}</button>
         </form>
         <LoadState :loading="loading" :error="''" :empty="!courses.length" empty-text="暂无课程。" />
-        <RouterLink v-for="course in courses" :key="course.id" :to="`/admin/courses/${course.id}`" class="card course-link">
+        <RouterLink v-for="course in courses" :key="course.id" :to="`/admin/courses/${course.id}`" class="card card-link">
             <small>{{ course.term }} · {{ course.status === "active" ? "开放" : "已归档" }}</small>
             <h3>{{ course.course_name }}</h3>
             <p>{{ course.teacher_name || "教师待确认" }}</p>

@@ -42,6 +42,8 @@ type InstanceItem struct {
 	ID          uuid.UUID `json:"id"`
 	CourseName  string    `json:"course_name"`
 	Term        string    `json:"term"`
+	TermYear    int       `json:"term_year"`
+	TermSeason  string    `json:"term_season"`
 	TeacherName *string   `json:"teacher_name"`
 	Timezone    string    `json:"timezone"`
 	Status      string    `json:"status"`
@@ -50,7 +52,7 @@ type InstanceItem struct {
 
 func (s Service) ListInstances(ctx context.Context, user uuid.UUID, onlyMine bool) ([]InstanceItem, error) {
 	q := s.DB.WithContext(ctx).Table("course_instances ci").
-		Select("ci.id,c.name AS course_name,ci.term,ci.teacher_name,ci.timezone,ci.status,(e.id IS NOT NULL) AS joined").
+		Select("ci.id,c.name AS course_name,(ci.term_year::text||ci.term_season||'季学期') AS term,ci.term_year,ci.term_season,ci.teacher_name,ci.timezone,ci.status,(e.id IS NOT NULL) AS joined").
 		Joins("JOIN courses c ON c.id=ci.course_id").
 		Joins("LEFT JOIN enrollments e ON e.course_instance_id=ci.id AND e.user_id=? AND e.status='active'", user)
 	if onlyMine {
@@ -59,7 +61,7 @@ func (s Service) ListInstances(ctx context.Context, user uuid.UUID, onlyMine boo
 		q = q.Where("ci.status='active'")
 	}
 	var rows []InstanceItem
-	err := q.Order("ci.term DESC,c.name ASC,ci.id ASC").Scan(&rows).Error
+	err := q.Order("ci.term_year DESC,ci.term_season DESC,c.name ASC,ci.id ASC").Scan(&rows).Error
 	return rows, err
 }
 
@@ -69,10 +71,10 @@ func (s Service) ListAllInstances(ctx context.Context, actor uuid.UUID) ([]Insta
 	}
 	var rows []InstanceItem
 	err := s.DB.WithContext(ctx).Table("course_instances ci").
-		Select("ci.id,c.name AS course_name,ci.term,ci.teacher_name,ci.timezone,ci.status,(e.id IS NOT NULL) AS joined").
+		Select("ci.id,c.name AS course_name,(ci.term_year::text||ci.term_season||'季学期') AS term,ci.term_year,ci.term_season,ci.teacher_name,ci.timezone,ci.status,(e.id IS NOT NULL) AS joined").
 		Joins("JOIN courses c ON c.id=ci.course_id").
 		Joins("LEFT JOIN enrollments e ON e.course_instance_id=ci.id AND e.user_id=? AND e.status='active'", actor).
-		Order("ci.term DESC,c.name ASC,ci.id ASC").Scan(&rows).Error
+		Order("ci.term_year DESC,ci.term_season DESC,c.name ASC,ci.id ASC").Scan(&rows).Error
 	return rows, err
 }
 
@@ -96,11 +98,17 @@ func (s Service) SetEnrollment(ctx context.Context, user, ci uuid.UUID, joined b
 		Where("user_id=? AND course_instance_id=?", user, ci).Update("status", "left").Error
 }
 
+// 学期由年份与季节两个字段表达；输入侧先校验，数据库 CHECK 是最后一道。
+func validTerm(year int, season string) bool {
+	return year >= 2000 && year <= 2100 && (season == "春" || season == "秋")
+}
+
 type CreateInstanceInput struct {
 	CourseID    *uuid.UUID `json:"course_id"`
 	CourseName  string     `json:"course_name"`
 	CourseCode  *string    `json:"course_code"`
-	Term        string     `json:"term"`
+	TermYear    int        `json:"term_year"`
+	TermSeason  string     `json:"term_season"`
 	TeacherName *string    `json:"teacher_name"`
 	Timezone    string     `json:"timezone"`
 }
@@ -109,8 +117,8 @@ func (s Service) CreateInstance(ctx context.Context, u uuid.UUID, in CreateInsta
 	if err := s.RequireAdmin(ctx, u); err != nil {
 		return shared.CourseInstance{}, err
 	}
-	if in.Term == "" || (in.CourseID == nil && in.CourseName == "") {
-		return shared.CourseInstance{}, shared.JSONError("courses.invalid_input", "课程名称和学期不能为空", 400)
+	if !validTerm(in.TermYear, in.TermSeason) || (in.CourseID == nil && in.CourseName == "") {
+		return shared.CourseInstance{}, shared.JSONError("courses.invalid_input", "课程名称或学期不合法", 400)
 	}
 	tz := in.Timezone
 	if tz == "" {
@@ -132,36 +140,13 @@ func (s Service) CreateInstance(ctx context.Context, u uuid.UUID, in CreateInsta
 			}
 			cid = c.ID
 		}
-		out = shared.CourseInstance{CourseID: cid, Term: in.Term, TeacherName: in.TeacherName, Timezone: tz, Status: "active", CreatedBy: u}
+		out = shared.CourseInstance{CourseID: cid, TermYear: in.TermYear, TermSeason: in.TermSeason, TeacherName: in.TeacherName, Timezone: tz, Status: "active", CreatedBy: u}
 		if e := tx.Create(&out).Error; e != nil {
 			return e
 		}
 		return nil
 	})
 	return out, e
-}
-func (s Service) PutMeetings(ctx context.Context, u, ci uuid.UUID, items []shared.CourseMeeting) ([]shared.CourseMeeting, error) {
-	if e := s.RequireAdmin(ctx, u); e != nil {
-		return nil, e
-	}
-	for i := range items {
-		if items[i].Weekday < 1 || items[i].Weekday > 7 || items[i].StartTime >= items[i].EndTime {
-			return nil, shared.JSONError("courses.invalid_meeting", "上课时间不合法", 400)
-		}
-		items[i].CourseInstanceID = ci
-	}
-	e := s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if e := tx.Where("course_instance_id=?", ci).Delete(&shared.CourseMeeting{}).Error; e != nil {
-			return e
-		}
-		for i := range items {
-			if e := tx.Create(&items[i]).Error; e != nil {
-				return e
-			}
-		}
-		return nil
-	})
-	return items, e
 }
 
 type EnrollmentItem struct {
@@ -186,7 +171,8 @@ func (s Service) ListEnrollments(ctx context.Context, actor, ci uuid.UUID) ([]En
 
 type UpdateInstanceInput struct {
 	CourseName  string  `json:"course_name"`
-	Term        string  `json:"term"`
+	TermYear    int     `json:"term_year"`
+	TermSeason  string  `json:"term_season"`
 	TeacherName *string `json:"teacher_name"`
 	Timezone    string  `json:"timezone"`
 	Status      string  `json:"status"`
@@ -196,7 +182,7 @@ func (s Service) UpdateInstance(ctx context.Context, actor, ci uuid.UUID, in Upd
 	if err := s.RequireAdmin(ctx, actor); err != nil {
 		return shared.CourseInstance{}, err
 	}
-	if strings.TrimSpace(in.CourseName) == "" || strings.TrimSpace(in.Term) == "" || (in.Status != "active" && in.Status != "archived") {
+	if strings.TrimSpace(in.CourseName) == "" || !validTerm(in.TermYear, in.TermSeason) || (in.Status != "active" && in.Status != "archived") {
 		return shared.CourseInstance{}, shared.JSONError("courses.invalid_input", "课程名称、学期或状态不合法", 400)
 	}
 	var instance shared.CourseInstance
@@ -207,38 +193,12 @@ func (s Service) UpdateInstance(ctx context.Context, actor, ci uuid.UUID, in Upd
 		if err := tx.Model(&shared.Course{}).Where("id=?", instance.CourseID).Update("name", strings.TrimSpace(in.CourseName)).Error; err != nil {
 			return err
 		}
-		instance.Term, instance.TeacherName, instance.Status = strings.TrimSpace(in.Term), in.TeacherName, in.Status
+		instance.TermYear, instance.TermSeason = in.TermYear, in.TermSeason
+		instance.TeacherName, instance.Status = in.TeacherName, in.Status
 		if in.Timezone != "" {
 			instance.Timezone = in.Timezone
 		}
 		return tx.Save(&instance).Error
 	})
 	return instance, err
-}
-
-func (s Service) ListMeetings(ctx context.Context, actor, ci uuid.UUID) ([]shared.CourseMeeting, error) {
-	if err := s.RequireAdmin(ctx, actor); err != nil {
-		return nil, err
-	}
-	var rows []shared.CourseMeeting
-	err := s.DB.WithContext(ctx).Where("course_instance_id=?", ci).Order("weekday,start_time,id").Find(&rows).Error
-	return rows, err
-}
-
-type ScheduleItem struct {
-	CourseInstanceID uuid.UUID  `json:"course_instance_id"`
-	CourseName       string     `json:"course_name"`
-	Term             string     `json:"term"`
-	Weekday          int        `json:"weekday"`
-	StartTime        string     `json:"start_time"`
-	EndTime          string     `json:"end_time"`
-	Location         *string    `json:"location"`
-	ValidFrom        *time.Time `json:"valid_from"`
-	ValidTo          *time.Time `json:"valid_to"`
-}
-
-func (s Service) ListSchedule(ctx context.Context, u uuid.UUID) ([]ScheduleItem, error) {
-	var rows []ScheduleItem
-	e := s.DB.WithContext(ctx).Table("enrollments e").Select("ci.id course_instance_id,c.name course_name,ci.term,m.weekday,m.start_time,m.end_time,m.location,m.valid_from,m.valid_to").Joins("JOIN course_instances ci ON ci.id=e.course_instance_id").Joins("JOIN courses c ON c.id=ci.course_id").Joins("JOIN course_meetings m ON m.course_instance_id=ci.id").Where("e.user_id=? AND e.status='active' AND ci.status='active'", u).Order("m.weekday,m.start_time,ci.id").Scan(&rows).Error
-	return rows, e
 }

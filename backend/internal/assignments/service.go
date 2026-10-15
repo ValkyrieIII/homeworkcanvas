@@ -147,7 +147,7 @@ type MineItem struct {
 
 func (s Service) ListMine(ctx context.Context, u uuid.UUID, bucket string, courseID *uuid.UUID) ([]MineItem, error) {
 	q := s.DB.WithContext(ctx).Table("assignments a").Select(`
-		a.id, a.course_instance_id, c.name course_name, ci.term,
+		a.id, a.course_instance_id, c.name course_name, (ci.term_year::text||ci.term_season||'季学期') AS term,
 		a.title, a.description, a.official_due_at, a.submission_method,
 		aus.personal_due_at,
 		COALESCE(aus.personal_due_at, a.official_due_at) effective_due_at,
@@ -199,7 +199,7 @@ func (s Service) ListAdmin(ctx context.Context, actor uuid.UUID, status string, 
 		return nil, nil, shared.JSONError("assignments.invalid_status", "作业状态不合法", 400)
 	}
 	q := s.DB.WithContext(ctx).Table("assignments a").
-		Select("a.*,c.name AS course_name,ci.term,si.source_type,si.original_filename,ac.evidence").
+		Select("a.*,c.name AS course_name,(ci.term_year::text||ci.term_season||'季学期') AS term,si.source_type,si.original_filename,ac.evidence").
 		Joins("JOIN course_instances ci ON ci.id=a.course_instance_id").
 		Joins("JOIN courses c ON c.id=ci.course_id").
 		Joins("LEFT JOIN assignment_candidates ac ON ac.id=a.source_candidate_id").
@@ -240,7 +240,7 @@ func (s Service) ListCourse(ctx context.Context, actor, ci uuid.UUID) ([]CourseI
 	}
 	var rows []CourseItem
 	err := s.DB.WithContext(ctx).Table("assignments a").
-		Select("a.*,c.name AS course_name,ci.term").
+		Select("a.*,c.name AS course_name,(ci.term_year::text||ci.term_season||'季学期') AS term").
 		Joins("JOIN course_instances ci ON ci.id=a.course_instance_id").
 		Joins("JOIN courses c ON c.id=ci.course_id").
 		Where("a.course_instance_id=?", ci).
@@ -263,7 +263,7 @@ func (s Service) ListPending(ctx context.Context, actor uuid.UUID, courseID *uui
 	}
 	rows := make([]PendingItem, 0)
 	q := s.DB.WithContext(ctx).Table("assignment_candidates ac").
-		Select("ac.*,si.course_instance_id,si.source_type,si.original_filename,c.name AS course_name,ci.term").
+		Select("ac.*,si.course_instance_id,si.source_type,si.original_filename,c.name AS course_name,(ci.term_year::text||ci.term_season||'季学期') AS term").
 		Joins("JOIN source_items si ON si.id=ac.source_item_id").
 		Joins("JOIN course_instances ci ON ci.id=si.course_instance_id").
 		Joins("JOIN courses c ON c.id=ci.course_id").
@@ -370,7 +370,17 @@ func (s Service) AcceptCandidate(ctx context.Context, u, cid uuid.UUID, in Creat
 				in.SubmissionMethod = c.SubmissionMethod
 			}
 		}
-		out = shared.Assignment{CourseInstanceID: src.CourseInstanceID, Title: in.Title, Description: in.Description, OfficialDueAt: in.OfficialDueAt, SubmissionMethod: in.SubmissionMethod, Status: "published", SourceCandidateID: &c.ID, CreatedBy: u}
+		courseID := uuid.Nil
+		if src.CourseInstanceID != nil {
+			courseID = *src.CourseInstanceID
+		}
+		if c.CourseInstanceID != nil {
+			courseID = *c.CourseInstanceID
+		}
+		if courseID == uuid.Nil {
+			return shared.JSONError("assignments.course_required", "这条候选还没定课程，请先指定", 400)
+		}
+		out = shared.Assignment{CourseInstanceID: courseID, Title: in.Title, Description: in.Description, OfficialDueAt: in.OfficialDueAt, SubmissionMethod: in.SubmissionMethod, Status: "published", SourceCandidateID: &c.ID, CreatedBy: u}
 		if e := tx.Create(&out).Error; e != nil {
 			return e
 		}

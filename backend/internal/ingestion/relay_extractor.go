@@ -52,7 +52,13 @@ func rawText(raw json.RawMessage) string {
 	return strings.Trim(s, `"`)
 }
 
+// 抽取统一交给本机的 pi agent：材料怎么读、拿什么当证据，都由它自己决定。
+// 原来"按 MODEL_PROVIDER 选中转或规则实现"的逻辑保留为 legacyConfiguredExtractor 备查，不再参与选择。
 func NewConfiguredExtractor() Extractor {
+	return NewPiExtractor()
+}
+
+func legacyConfiguredExtractor() Extractor {
 	provider := strings.ToLower(strings.TrimSpace(os.Getenv("MODEL_PROVIDER")))
 	apiKey := strings.TrimSpace(os.Getenv("MODEL_API_KEY"))
 	if provider == "" || apiKey == "" {

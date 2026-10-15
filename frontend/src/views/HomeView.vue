@@ -1,21 +1,20 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
 import { api } from "../api";
-import { arrayOrEmpty, type Assignment, type Meeting } from "../types";
+import { arrayOrEmpty, type Assignment } from "../types";
 import AssignmentCard from "../components/AssignmentCard.vue";
 import LoadState from "../components/LoadState.vue";
 import { useAssignmentState } from "../composables/useAssignmentState";
 const upcoming = ref<Assignment[]>([]),
     overdue = ref<Assignment[]>([]),
     undated = ref<Assignment[]>([]),
-    schedule = ref<Meeting[]>([]),
     loading = ref(false),
     error = ref("");
 async function load() {
     loading.value = true;
     error.value = "";
     try {
-        const [u, o, d, s] = await Promise.all([
+        const [u, o, d] = await Promise.all([
             api<{ data: Assignment[] | null }>(
                 "/me/assignments?bucket=upcoming",
             ),
@@ -25,12 +24,10 @@ async function load() {
             api<{ data: Assignment[] | null }>(
                 "/me/assignments?bucket=undated",
             ),
-            api<{ data: Meeting[] | null }>("/me/schedule"),
         ]);
         upcoming.value = arrayOrEmpty(u.data).filter(item => item.completion_status === "todo").slice(0, 3);
         overdue.value = arrayOrEmpty(o.data).filter(item => item.completion_status === "todo").slice(0, 3);
         undated.value = arrayOrEmpty(d.data).filter(item => item.completion_status === "todo").slice(0, 3);
-        schedule.value = arrayOrEmpty(s.data);
     } catch (e: any) {
         error.value = e.message;
     } finally {
@@ -81,16 +78,6 @@ onMounted(load);
             <p v-if="!undated.length" class="empty">
                 暂无待确认作业。
             </p>
-            <h2>今天/最近课表</h2>
-            <article
-                v-for="m in schedule"
-                :key="`${m.course_instance_id}-${m.weekday}-${m.start_time}`"
-                class="card"
-            >
-                <h3>{{ m.course_name }}</h3>
-                <p>周{{ m.weekday }} {{ m.start_time }}–{{ m.end_time }} {{ m.location || "" }}</p>
-            </article>
-            <p v-if="!schedule.length" class="empty">暂无课程安排。</p></template>
-        >
+        </template>
     </section>
 </template>

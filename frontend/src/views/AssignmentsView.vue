@@ -23,7 +23,7 @@ const courseOptions = computed(() => [
 const buckets = [
     ["upcoming", "即将截止"],
     ["overdue", "已逾期"],
-    ["undated", "待确认"],
+    ["undated", "未定截止时间"],
     ["all", "全部"],
 ] as const;
 const bucket = () =>
@@ -69,8 +69,7 @@ onMounted(() => { void loadCourses(); void load(); });
 <template>
     <section>
         <div>
-            <p class="eyebrow">我的作业</p>
-            <h1>跨课程作业</h1>
+            <h1>我的 DDL</h1>
         </div>
         <div class="filter-label">课程
             <SelectMenu
@@ -80,7 +79,7 @@ onMounted(() => { void loadCourses(); void load(); });
                 @update:model-value="setCourse"
             />
         </div>
-        <div class="tabs">
+        <nav class="tabs" aria-label="作业分组">
             <RouterLink
                 v-for="[key, label] in buckets"
                 :key="key"
@@ -88,7 +87,7 @@ onMounted(() => { void loadCourses(); void load(); });
                 :class="{ active: bucket() === key }"
                 >{{ label }}</RouterLink
             >
-        </div>
+        </nav>
         <p v-if="actionError" class="error" role="alert">{{ actionError }}</p>
         <LoadState
             :loading="loading"

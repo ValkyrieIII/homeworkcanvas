@@ -90,7 +90,6 @@ const submissionNote = computed(() => {
         </p>
         <div class="assignment-card__details">
             <p>官方截止：{{ formatDate(assignment.official_due_at) }}</p>
-            <p class="source-note">根据老师通知整理，经管理员核对发布。</p>
             <p v-if="assignment.personal_due_at" class="personal-due">
                 个人计划：{{ formatDate(assignment.personal_due_at) }}
             </p>

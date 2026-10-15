@@ -42,6 +42,8 @@ type Extracted struct {
 	OfficialDueAt    *time.Time
 	RawDueExpression string
 	SubmissionMethod string
+	// CourseInstanceID 是 agent 判定的课程；传统实现留空。
+	CourseInstanceID string
 	Evidence         []Evidence
 	Uncertain        []string
 }
@@ -53,11 +55,33 @@ type Page struct {
 type ExtractionInput struct {
 	CurrentDate string
 	Pages       []Page
+
+	// 下面几项给"能自己读原始材料"的抽取器（agent）用；传统实现忽略它们。
+	SourcePath string
+	SourceName string
+	RawText    string
+	// Courses 是调用者自己的课程清单，agent 判课程时只能从这里选。
+	Courses []CourseOption
+}
+
+// CourseOption 是喂给 agent 的课程选项。
+type CourseOption struct {
+	ID      string
+	Name    string
+	Term    string
+	Teacher string
 }
 
 // Extractor 与 HTTP 和文档格式解耦，生产环境通过模型中转服务调用。
 type Extractor interface {
 	Extract(context.Context, ExtractionInput) ([]Extracted, error)
+}
+
+// SourceReadingExtractor 表示抽取器自己读原始材料，不需要系统先把它解析成页，
+// 所以也跳过页级证据校验与"未发现作业页"判断。
+type SourceReadingExtractor interface {
+	Extractor
+	ReadsSource() bool
 }
 type Service struct {
 	DB         *gorm.DB
@@ -99,11 +123,10 @@ func (s Service) ListMine(ctx context.Context, user uuid.UUID) ([]MineSource, er
 		Select(`si.id,si.course_instance_id,c.name AS course_name,si.submitted_by,
 			u.display_name AS submitter_name,si.source_type,si.original_filename,
 			si.status,ij.id AS job_id,ij.stage,ij.error_message,si.created_at`).
-		Joins("JOIN course_instances ci ON ci.id=si.course_instance_id").
-		Joins("JOIN courses c ON c.id=ci.course_id").
+		Joins("LEFT JOIN course_instances ci ON ci.id=si.course_instance_id").
+		Joins("LEFT JOIN courses c ON c.id=ci.course_id").
 		Joins("JOIN users u ON u.id=si.submitted_by").
-		Joins("JOIN enrollments e ON e.course_instance_id=ci.id AND e.user_id=? AND e.status='active'", user).
-		Joins("JOIN ingestion_jobs ij ON ij.source_item_id=si.id").
+		Joins("LEFT JOIN ingestion_jobs ij ON ij.source_item_id=si.id").
 		Where("si.submitted_by=?", user).Order("si.created_at DESC,si.id DESC").Scan(&rows).Error
 	return rows, err
 }
@@ -190,6 +213,14 @@ func (s Service) ReviewMetrics(ctx context.Context, userID, courseInstanceID uui
 	return metrics, nil
 }
 
+// coursePtr 把可选的课程 id 转成指针：零值表示"来源不带课程"（写 NULL）。
+func coursePtr(id uuid.UUID) *uuid.UUID {
+	if id == uuid.Nil {
+		return nil
+	}
+	return &id
+}
+
 func (s Service) CreateTextSource(ctx context.Context, u, ci uuid.UUID, text string) (shared.SourceItem, shared.IngestionJob, error) {
 	if e := s.Membership.RequireActiveMember(ctx, u, ci); e != nil {
 		return shared.SourceItem{}, shared.IngestionJob{}, e
@@ -200,7 +231,7 @@ func (s Service) CreateTextSource(ctx context.Context, u, ci uuid.UUID, text str
 	}
 	sum := sha256.Sum256([]byte(text))
 	checksum := hex.EncodeToString(sum[:])
-	src := shared.SourceItem{CourseInstanceID: ci, SubmittedBy: u, SourceType: "text", RawText: &text, Checksum: &checksum, Status: "queued"}
+	src := shared.SourceItem{CourseInstanceID: coursePtr(ci), SubmittedBy: u, SourceType: "text", RawText: &text, Checksum: &checksum, Status: "queued"}
 	job := shared.IngestionJob{Stage: "queued", Status: "queued", MaxAttempts: 3}
 	if e := s.createSourceAndJob(ctx, &src, &job); e != nil {
 		return src, job, e
@@ -211,9 +242,117 @@ func (s Service) CreateTextSource(ctx context.Context, u, ci uuid.UUID, text str
 	return src, job, nil
 }
 
-func (s Service) CreateFileSource(ctx context.Context, u, ci uuid.UUID, file *multipart.FileHeader, message string) (FileSourceResult, error) {
+// AgentSubmission 是 agent（本机 pi 或集市 agent）投递上来的一组提取结果。
+// 材料在 agent 那边已经读完了：这里不解析、不调模型，只负责接住并落成待确认候选。
+type AgentSubmission struct {
+	SourceKey string      `json:"source_key"`
+	Note      string      `json:"note"`
+	Items     []AgentItem `json:"items"`
+}
+
+type AgentItem struct {
+	Title            string          `json:"title"`
+	Description      string          `json:"description"`
+	OfficialDueAt    *time.Time      `json:"official_due_at"`
+	RawDueExpression *string         `json:"raw_due_expression"`
+	SubmissionMethod *string         `json:"submission_method"`
+	Evidence         []AgentEvidence `json:"evidence"`
+	Uncertain        []string        `json:"uncertain_fields"`
+}
+
+// AgentEvidence 一条依据：可以是外链，也可以指向某份材料的具体页。
+type AgentEvidence struct {
+	ExternalURL  *string `json:"external_url,omitempty"`
+	OriginalName *string `json:"original_name,omitempty"`
+	PageNumber   *int    `json:"page_number,omitempty"`
+	TextExcerpt  *string `json:"text_excerpt,omitempty"`
+	Note         *string `json:"note,omitempty"`
+}
+
+// SubmitAgent 落一条投递。同课程内同一 source_key 只落一次，重复投递返回已有候选。
+func (s Service) SubmitAgent(ctx context.Context, u, ci uuid.UUID, in AgentSubmission) (shared.SourceItem, []shared.AssignmentCandidate, error) {
 	if e := s.Membership.RequireActiveMember(ctx, u, ci); e != nil {
-		return FileSourceResult{}, e
+		return shared.SourceItem{}, nil, e
+	}
+	if len(in.Items) == 0 {
+		return shared.SourceItem{}, nil, shared.JSONError("ingestion.empty_submission", "投递内容为空", 400)
+	}
+	for i, it := range in.Items {
+		if strings.TrimSpace(it.Title) == "" {
+			return shared.SourceItem{}, nil, shared.JSONError("ingestion.invalid_item", fmt.Sprintf("第 %d 条缺少标题", i+1), 400)
+		}
+	}
+	var src shared.SourceItem
+	var out []shared.AssignmentCandidate
+	e := s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var checksum *string
+		if key := strings.TrimSpace(in.SourceKey); key != "" {
+			sum := sha256.Sum256([]byte(key))
+			v := hex.EncodeToString(sum[:])
+			checksum = &v
+			var existing shared.SourceItem
+			e := tx.Where("course_instance_id=? AND source_type='agent' AND checksum=?", ci, v).
+				Order("created_at ASC, id ASC").First(&existing).Error
+			if e == nil {
+				src = existing
+				return tx.Where("source_item_id=?", existing.ID).Order("ordinal ASC").Find(&out).Error
+			}
+			if e != gorm.ErrRecordNotFound {
+				return e
+			}
+		}
+		note := strings.TrimSpace(in.Note)
+		src = shared.SourceItem{CourseInstanceID: coursePtr(ci), SubmittedBy: u, SourceType: "agent", Status: "review_ready", Checksum: checksum}
+		if note != "" {
+			src.RawText = &note
+		}
+		if e := tx.Create(&src).Error; e != nil {
+			return e
+		}
+		for i, it := range in.Items {
+			evidence, e := json.Marshal(it.Evidence)
+			if e != nil {
+				return e
+			}
+			if len(it.Evidence) == 0 {
+				evidence = []byte("[]")
+			}
+			uncertain, e := json.Marshal(it.Uncertain)
+			if e != nil {
+				return e
+			}
+			if len(it.Uncertain) == 0 {
+				uncertain = []byte("[]")
+			}
+			c := shared.AssignmentCandidate{
+				SourceItemID:     src.ID,
+				Ordinal:          i + 1,
+				Title:            strings.TrimSpace(it.Title),
+				Description:      it.Description,
+				OfficialDueAt:    it.OfficialDueAt,
+				RawDueExpression: it.RawDueExpression,
+				SubmissionMethod: it.SubmissionMethod,
+				Evidence:         string(evidence),
+				FieldConfidence:  "{}",
+				UncertainFields:  string(uncertain),
+				ReviewStatus:     "pending",
+			}
+			if e := tx.Create(&c).Error; e != nil {
+				return e
+			}
+			out = append(out, c)
+		}
+		return nil
+	})
+	return src, out, e
+}
+
+func (s Service) CreateFileSource(ctx context.Context, u, ci uuid.UUID, file *multipart.FileHeader, message string) (FileSourceResult, error) {
+	// ci 为零值表示走统一入口：不要求先选课，课程由 agent 判在候选上。
+	if ci != uuid.Nil {
+		if e := s.Membership.RequireActiveMember(ctx, u, ci); e != nil {
+			return FileSourceResult{}, e
+		}
 	}
 	if file == nil || file.Size <= 0 || file.Size > maxUploadBytes {
 		return FileSourceResult{}, shared.JSONError("ingestion.invalid_file", "请选择不超过 25MB 的 PDF、PPT 或 PPTX 文件", 422)
@@ -223,7 +362,7 @@ func (s Service) CreateFileSource(ctx context.Context, u, ci uuid.UUID, file *mu
 		return FileSourceResult{}, shared.JSONError("ingestion.unsupported_file", "仅支持 PDF、PPT 和 PPTX 文件", 422)
 	}
 	name, mime, size := filepath.Base(file.Filename), file.Header.Get("Content-Type"), file.Size
-	src := shared.SourceItem{CourseInstanceID: ci, SubmittedBy: u, SourceType: "file", OriginalFilename: &name, MimeType: &mime, ByteSize: &size, Status: "queued"}
+	src := shared.SourceItem{CourseInstanceID: coursePtr(ci), SubmittedBy: u, SourceType: "file", OriginalFilename: &name, MimeType: &mime, ByteSize: &size, Status: "queued"}
 	message = strings.TrimSpace(message)
 	if message != "" {
 		src.RawText = &message
@@ -283,7 +422,11 @@ func (s Service) createOrReuseFileSource(ctx context.Context, src *shared.Source
 		return false, fmt.Errorf("file checksum is required")
 	}
 	h := fnv.New64a()
-	_, _ = h.Write(src.CourseInstanceID[:])
+	courseKey := uuid.Nil
+	if src.CourseInstanceID != nil {
+		courseKey = *src.CourseInstanceID
+	}
+	_, _ = h.Write(courseKey[:])
 	_, _ = h.Write(src.SubmittedBy[:])
 	_, _ = h.Write([]byte(*src.Checksum))
 	var reused bool
@@ -292,8 +435,13 @@ func (s Service) createOrReuseFileSource(ctx context.Context, src *shared.Source
 			return e
 		}
 		var existing shared.SourceItem
-		e := tx.Where("course_instance_id=? AND submitted_by=? AND source_type='file' AND checksum=? AND status<>'failed'", src.CourseInstanceID, src.SubmittedBy, *src.Checksum).
-			Order("created_at ASC, id ASC").First(&existing).Error
+		q := tx.Where("submitted_by=? AND source_type='file' AND checksum=? AND status<>'failed'", src.SubmittedBy, *src.Checksum)
+		if src.CourseInstanceID == nil {
+			q = q.Where("course_instance_id IS NULL")
+		} else {
+			q = q.Where("course_instance_id=?", *src.CourseInstanceID)
+		}
+		e := q.Order("created_at ASC, id ASC").First(&existing).Error
 		if e == nil {
 			var existingJob shared.IngestionJob
 			if e := tx.Where("source_item_id=?", existing.ID).First(&existingJob).Error; e != nil {
@@ -366,51 +514,87 @@ func (s Service) Process(ctx context.Context, jid uuid.UUID) error {
 	if e := s.DB.WithContext(ctx).First(&src, "id=?", job.SourceItemID).Error; e != nil {
 		return s.fail(&job, "ingestion.source_missing", "来源记录不存在")
 	}
+	// 统一入口里来源可以不带课程——课程由 agent 判在候选上。
 	var courseInstance shared.CourseInstance
-	if e := s.DB.WithContext(ctx).First(&courseInstance, "id=?", src.CourseInstanceID).Error; e != nil {
-		return s.fail(&job, "ingestion.course_missing", "课程不存在")
+	if src.CourseInstanceID != nil {
+		if e := s.DB.WithContext(ctx).First(&courseInstance, "id=?", *src.CourseInstanceID).Error; e != nil {
+			return s.fail(&job, "ingestion.course_missing", "课程不存在")
+		}
 	}
 	if e := s.DB.WithContext(ctx).Model(&src).Update("status", "processing").Error; e != nil {
 		return e
 	}
-	pages, e := s.parse(ctx, &job, &src)
-	if e != nil {
-		slog.Error("ingestion_parse_error", "job_id", job.ID, "source_id", src.ID, "error_type", fmt.Sprintf("%T", e))
-		return s.fail(&job, "ingestion.parse_failed", "文件无法解析，请检查格式后重新上传")
+	// 能自己读原始材料的抽取器（agent）不走解析/定位/页级校验这一套：
+	// 材料怎么读、证据长什么样，由它自己决定。
+	usesSource := false
+	if r, ok := s.Extractor.(SourceReadingExtractor); ok {
+		usesSource = r.ReadsSource()
 	}
-	if e := s.setStage(ctx, &job, "locating", started, len(pages)); e != nil {
-		return e
-	}
-	if src.SourceType == "file" && src.RawText == nil {
-		pages = locate(pages)
-		if len(pages) > 0 {
-			if e := RenderPreviews(ctx, *src.OriginalFilename, *job.TemporaryLocator, pages); e != nil {
-				return s.fail(&job, "ingestion.preview_failed", "文件页面预览生成失败，请重新上传")
+
+	var pages []Page
+	if !usesSource {
+		parsed, e := s.parse(ctx, &job, &src)
+		if e != nil {
+			slog.Error("ingestion_parse_error", "job_id", job.ID, "source_id", src.ID, "error_type", fmt.Sprintf("%T", e))
+			return s.fail(&job, "ingestion.parse_failed", "文件无法解析，请检查格式后重新上传")
+		}
+		pages = parsed
+		if e := s.setStage(ctx, &job, "locating", started, len(pages)); e != nil {
+			return e
+		}
+		if src.SourceType == "file" && src.RawText == nil {
+			pages = locate(pages)
+			if len(pages) > 0 {
+				if e := RenderPreviews(ctx, *src.OriginalFilename, *job.TemporaryLocator, pages); e != nil {
+					return s.fail(&job, "ingestion.preview_failed", "文件页面预览生成失败，请重新上传")
+				}
 			}
 		}
-	}
-	// Page zero is the accompanying teacher message. When it exists, keep
-	// the document pages too: the message may contain the only deadline or
-	// assignment signal, so locating the document alone would lose context.
-	pages = withTeacherMessage(src, pages)
-	if len(pages) == 0 {
-		return s.fail(&job, "ingestion.no_assignment_page", "未发现疑似作业页面，请重新上传或改用文字导入")
+		// Page zero is the accompanying teacher message. When it exists, keep
+		// the document pages too: the message may contain the only deadline or
+		// assignment signal, so locating the document alone would lose context.
+		pages = withTeacherMessage(src, pages)
+		if len(pages) == 0 {
+			return s.fail(&job, "ingestion.no_assignment_page", "未发现疑似作业页面，请重新上传或改用文字导入")
+		}
 	}
 	if e := s.setStage(ctx, &job, "extracting", started, len(pages)); e != nil {
 		return e
 	}
-	bounded, trimmed := boundPages(pages)
-	if trimmed > 0 {
-		slog.Warn("ingestion_prompt_trimmed", "job_id", job.ID, "trimmed_pages", trimmed, "located_pages", len(pages))
+	input := ExtractionInput{CurrentDate: chinaToday()}
+	if !usesSource {
+		bounded, trimmed := boundPages(pages)
+		if trimmed > 0 {
+			slog.Warn("ingestion_prompt_trimmed", "job_id", job.ID, "trimmed_pages", trimmed, "located_pages", len(pages))
+		}
+		input.Pages = bounded
+	} else if src.OriginalFilename != nil && job.TemporaryLocator != nil {
+		input.SourcePath = filepath.Join(*job.TemporaryLocator, "source"+strings.ToLower(filepath.Ext(*src.OriginalFilename)))
+		input.SourceName = *src.OriginalFilename
 	}
-	items, e := s.Extractor.Extract(ctx, ExtractionInput{CurrentDate: chinaToday(), Pages: bounded})
+	if src.RawText != nil {
+		input.RawText = *src.RawText
+	}
+	// agent 判课程时只能从调用者自己的课里选，所以把清单一起给它。
+	if usesSource {
+		if instances, e := s.Membership.ListInstances(ctx, src.SubmittedBy, true); e == nil {
+			for _, it := range instances {
+				teacher := ""
+				if it.TeacherName != nil {
+					teacher = *it.TeacherName
+				}
+				input.Courses = append(input.Courses, CourseOption{ID: it.ID.String(), Name: it.CourseName, Term: it.Term, Teacher: teacher})
+			}
+		}
+	}
+	items, e := s.Extractor.Extract(ctx, input)
 	if e != nil {
 		return s.retryOrFail(&job, "extracting", "ingestion.ai_unavailable", "暂时无法抽取作业候选："+truncateOneLine(e.Error(), 300))
 	}
-	if e := s.setStage(ctx, &job, "validating", started, len(bounded)); e != nil {
+	if e := s.setStage(ctx, &job, "validating", started, len(pages)); e != nil {
 		return e
 	}
-	if len(items) == 0 || validate(items, pages) != nil {
+	if len(items) == 0 || (!usesSource && validate(items, pages) != nil) {
 		return s.fail(&job, "ingestion.invalid_result", "抽取结果无法校验")
 	}
 	e = s.DB.Transaction(func(tx *gorm.DB) error {
@@ -421,7 +605,11 @@ func (s Service) Process(ctx context.Context, jid uuid.UUID) error {
 			ev, _ := json.Marshal(item.Evidence)
 			unc, _ := json.Marshal(item.Uncertain)
 			raw, method := item.RawDueExpression, item.SubmissionMethod
-			c := shared.AssignmentCandidate{SourceItemID: src.ID, Ordinal: i + 1, Title: item.Title, Description: item.Description, OfficialDueAt: item.OfficialDueAt, RawDueExpression: &raw, SubmissionMethod: &method, Evidence: string(ev), FieldConfidence: "{}", UncertainFields: string(unc), ReviewStatus: "pending"}
+			var courseID *uuid.UUID
+			if id, e := uuid.Parse(item.CourseInstanceID); e == nil {
+				courseID = &id
+			}
+			c := shared.AssignmentCandidate{SourceItemID: src.ID, Ordinal: i + 1, Title: item.Title, Description: item.Description, OfficialDueAt: item.OfficialDueAt, RawDueExpression: &raw, SubmissionMethod: &method, CourseInstanceID: courseID, Evidence: string(ev), FieldConfidence: "{}", UncertainFields: string(unc), ReviewStatus: "pending"}
 			if e := tx.Create(&c).Error; e != nil {
 				return e
 			}

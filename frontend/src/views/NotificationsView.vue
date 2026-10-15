@@ -42,15 +42,22 @@ onMounted(load);
         <article
             v-for="item in items"
             :key="item.id"
-            class="card"
+            class="card card-split"
             :class="{ unread: !item.read_at }"
         >
-            <h3 v-if="item.kind === 'assignment_retracted'">作业已撤回：{{ item.payload.title }}</h3>
-            <h3 v-else-if="item.kind === 'assignment_updated'">作业已修改：{{ item.payload.title }}</h3>
-            <h3 v-else>发布了新作业：{{ item.payload.title }}</h3>
-            <p v-if="item.kind !== 'assignment_retracted'">官方截止：{{ formatDate(item.payload.official_due_at) }}</p>
-            <small>{{ formatDate(item.created_at) }}</small
-            ><button v-if="!item.read_at" @click="read(item)">标为已读</button>
+            <RouterLink
+                class="card-split__link"
+                :to="`/courses/${item.payload.course_instance_id}/assignments`"
+            >
+                <h3 v-if="item.kind === 'assignment_retracted'">作业已撤回：{{ item.payload.title }}</h3>
+                <h3 v-else-if="item.kind === 'assignment_updated'">作业已修改：{{ item.payload.title }}</h3>
+                <h3 v-else>发布了新作业：{{ item.payload.title }}</h3>
+                <p v-if="item.kind !== 'assignment_retracted'">官方截止：{{ formatDate(item.payload.official_due_at) }}</p>
+                <small>{{ formatDate(item.created_at) }}</small>
+            </RouterLink>
+            <div v-if="!item.read_at" class="card-split__actions">
+                <button @click="read(item)">标为已读</button>
+            </div>
         </article>
     </section>
 </template>

@@ -37,8 +37,6 @@ const base = computed(() => `/courses/${props.courseId}`);
         <nav class="tabs" aria-label="课程详情导航">
             <RouterLink :to="`${base}/assignments`" active-class="active"
                 >作业</RouterLink
-            ><RouterLink :to="`${base}/schedule`" active-class="active"
-                >课表</RouterLink
             ><RouterLink :to="`${base}/sources`" active-class="active"
                 >来源导入</RouterLink
             >

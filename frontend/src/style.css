@@ -236,33 +236,9 @@ h3 {
     font-size: 14px;
 }
 .tabs a.active {
-    color: #1f5ea8 !important;
-    background: transparent !important;
-}
-.tabs a.active::after {
-    content: "";
-    position: absolute;
-    right: 10px;
-    bottom: -1px;
-    left: 10px;
-    height: 2px;
-    background: #1f5ea8;
-}
-.tabs .tab-button {
-    position: relative;
-    border: 0;
-    border-radius: 0;
-    background: transparent;
-    color: #637084;
-    padding: 10px 16px;
-    font: inherit;
-    font-size: 14px;
-    font-weight: 600;
-}
-.tabs .tab-button.active {
     color: #1f5ea8;
 }
-.tabs .tab-button.active::after {
+.tabs a.active::after {
     content: "";
     position: absolute;
     right: 10px;
@@ -312,14 +288,36 @@ h3 {
     background: #eef5fc;
     box-shadow: inset 3px 0 #1f5ea8;
 }
-.course-link {
+.card-link {
     transition:
         border-color 0.15s,
         box-shadow 0.15s;
 }
-.course-link:hover {
+/* 整卡是链接，hover/focus 时只亮边框，正文别跟着加下划线。 */
+.card-link:hover,
+.card-link:focus-visible {
     border-color: #9ebde2;
     box-shadow: 0 6px 18px #27364c0d;
+    text-decoration: none;
+}
+/* 卡里还留着按钮时用（按钮不能嵌进 <a>）：内边距从 .card 挪到链接上，
+   这样正文那块整张可点，不留一圈"看着能点、点下去没反应"的白边。 */
+.card-split {
+    padding: 0;
+}
+/* 这条链接包的是正文，不是链接文字：得把全局 a 的蓝色/600/下划线全退掉，
+   hover 那行也要写，否则 a:hover（权重 0,1,1）会盖过 .card-split__link（0,1,0）。 */
+.card-split__link,
+.card-split__link:hover,
+.card-split__link:focus-visible {
+    display: block;
+    padding: 18px 20px 12px;
+    color: inherit;
+    font-weight: inherit;
+    text-decoration: none;
+}
+.card-split__actions {
+    padding: 0 20px 18px;
 }
 .admin-form { margin: 18px 0; }
 .admin-form h2 { margin-top: 0; }
@@ -439,10 +437,11 @@ h3 {
     margin: 0;
 }
 .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin: 12px 0; }
-.meeting-row, .admin-list-item { display: flex; flex-wrap: wrap; gap: 10px; padding: 12px 0; border-bottom: 1px solid #e8ebef; }
-.meeting-row { align-items: end; }
-.admin-list-item { align-items: center; }
-.meeting-row label, .meeting-row .form-field { min-width: 95px; flex: 1; }
+.admin-list-item { display: flex; flex-wrap: wrap; gap: 10px; padding: 12px 0; border-bottom: 1px solid #e8ebef; align-items: center; }
+.dropzone { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 44px 20px; margin: 16px 0; border: 2px dashed #c8d0da; border-radius: 12px; background: #fafbfc; cursor: pointer; text-align: center; }
+.dropzone:hover, .dropzone.dragging { border-color: #4a7cc9; background: #f2f7ff; }
+.dropzone strong { font-size: 16px; }
+.dropzone small { color: #6b7683; }
 .admin-list-item strong { min-width: 180px; }
 .admin-list-item span { flex: 1; }
 .retract-confirm { flex-basis: 100%; padding: 10px 12px; background: #fff7ed; border-radius: 7px; }
@@ -655,5 +654,37 @@ textarea {
     .workbench-toolbar .filter-label { width: 100%; }
     .workbench-toolbar .select-menu { flex: 1; min-width: 0; max-width: none; }
     .tabs { overflow-x: auto; overflow-y: hidden; }
-    .tabs .tab-button { white-space: nowrap; }
+    .tabs a { white-space: nowrap; }
+}
+
+/* 两页工作台共用紧凑导航，内容区保留可阅读宽度。 */
+.simple-shell { min-height: 100vh; }
+.simple-header { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 18px max(20px, calc((100vw - 960px) / 2)); background: #fff; border-bottom: 1px solid #e3e7ec; }
+.simple-brand { color: #19253a; font-size: 18px; }
+.simple-nav { display: flex; gap: 8px; }
+.simple-nav a { padding: 9px 20px; border-radius: 8px; color: #657185; }
+.simple-nav a.active { color: #1f5ea8; background: #edf3fa; }
+.simple-content { max-width: 1000px; margin: 0 auto; padding: 32px 20px 64px; }
+.upload-intro, .tasks-heading p { color: #657185; }
+.upload-form { display: grid; gap: 18px; }
+.upload-form > button { justify-self: start; }
+.upload-form .dropzone { position: relative; display: grid; gap: 10px; text-align: center; border: 2px dashed #cbd5e1; border-radius: 12px; padding: 40px 20px; cursor: pointer; overflow-wrap: anywhere; }
+.upload-form .dropzone.dragging, .upload-form .dropzone:focus-within { border-color: #1f5ea8; background: #edf3fa; }
+.upload-form .dropzone input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+.upload-form .form-field { display: grid; gap: 8px; }
+.upload-form textarea { width: 100%; resize: vertical; }
+.upload-tasks { margin-top: 32px; }
+.tasks-heading, .task-title { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.tasks-heading h2, .task-title h3 { margin: 0; }
+.tasks-heading { margin-bottom: 16px; }
+.task-title h3 { overflow-wrap: anywhere; min-width: 0; }
+.task-status { flex-shrink: 0; padding: 5px 10px; border-radius: 20px; font-size: 13px; background: #edf3ed; color: #386346; }
+.task-status--active { background: #edf3fa; color: #1f5ea8; }
+.task-status--failed { background: #fcecec; color: #a33a3a; }
+@media (max-width: 520px) {
+    .simple-header { padding: 14px 16px; gap: 10px; }
+    .simple-brand { font-size: 15px; }
+    .simple-nav a { padding: 8px 12px; }
+    .simple-content { padding: 24px 16px 48px; }
+    .task-title { align-items: flex-start; flex-direction: column; gap: 10px; }
 }

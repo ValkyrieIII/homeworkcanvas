@@ -105,33 +105,6 @@ func main() {
 		v, e := cs.ListEnrollments(c, identity.Current(c).ID, ci)
 		respond(c, gin.H{"data": v, "next_cursor": nil}, e, 200)
 	})
-	api.PUT("/course-instances/:id/meetings", func(c *gin.Context) {
-		ci, e := id(c)
-		if e != nil {
-			bad(c)
-			return
-		}
-		var x []shared.CourseMeeting
-		if c.ShouldBindJSON(&x) != nil {
-			bad(c)
-			return
-		}
-		v, e := cs.PutMeetings(c, identity.Current(c).ID, ci, x)
-		respond(c, v, e, 200)
-	})
-	api.GET("/course-instances/:id/meetings", func(c *gin.Context) {
-		ci, e := id(c)
-		if e != nil {
-			bad(c)
-			return
-		}
-		v, e := cs.ListMeetings(c, identity.Current(c).ID, ci)
-		respond(c, gin.H{"data": v, "next_cursor": nil}, e, 200)
-	})
-	api.GET("/me/schedule", func(c *gin.Context) {
-		v, e := cs.ListSchedule(c, identity.Current(c).ID)
-		respond(c, gin.H{"data": v, "next_cursor": nil}, e, 200)
-	})
 	api.GET("/me/assignments", func(c *gin.Context) {
 		courseID, e := optionalCourseID(c)
 		if e != nil {
@@ -356,6 +329,34 @@ func main() {
 		}
 		v, e := in.ListCourseSources(c, identity.Current(c).ID, ci)
 		respond(c, gin.H{"data": v, "next_cursor": nil}, e, 200)
+	})
+	api.POST("/agent/submissions", func(c *gin.Context) {
+		var x struct {
+			CourseInstanceID uuid.UUID             `json:"course_instance_id"`
+			SourceKey        string                `json:"source_key"`
+			Note             string                `json:"note"`
+			Items            []ingestion.AgentItem `json:"items"`
+		}
+		if c.ShouldBindJSON(&x) != nil {
+			bad(c)
+			return
+		}
+		src, candidates, e := in.SubmitAgent(c, identity.Current(c).ID, x.CourseInstanceID, ingestion.AgentSubmission{SourceKey: x.SourceKey, Note: x.Note, Items: x.Items})
+		respond(c, gin.H{"source_item": src, "candidates": candidates}, e, 201)
+	})
+	// 统一上传入口：不要求先选课，课程由 agent 判在候选上。
+	api.POST("/agent/inputs", func(c *gin.Context) {
+		file, e := c.FormFile("file")
+		if e != nil {
+			bad(c)
+			return
+		}
+		result, e := in.CreateFileSource(c, identity.Current(c).ID, uuid.Nil, file, c.PostForm("text"))
+		status := http.StatusAccepted
+		if result.Reused {
+			status = http.StatusOK
+		}
+		respond(c, gin.H{"source": result.Source, "job": result.Job, "reused": result.Reused}, e, status)
 	})
 	addr := os.Getenv("HTTP_ADDR")
 	if addr == "" {

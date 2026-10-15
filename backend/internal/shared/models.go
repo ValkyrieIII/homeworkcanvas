@@ -36,7 +36,8 @@ type CourseInstance struct {
 	Base
 	CourseID    uuid.UUID `gorm:"type:uuid;not null"`
 	Course      Course
-	Term        string `gorm:"not null"`
+	TermYear    int    `gorm:"not null"`
+	TermSeason  string `gorm:"not null"`
 	TeacherName *string
 	Timezone    string    `gorm:"not null;default:Asia/Shanghai"`
 	Status      string    `gorm:"not null;default:active"`
@@ -48,16 +49,6 @@ type Enrollment struct {
 	CourseInstanceID uuid.UUID `gorm:"type:uuid;not null;uniqueIndex:ux_enrollment"`
 	Status           string    `gorm:"not null;default:active"`
 	JoinedAt         time.Time `gorm:"not null"`
-}
-type CourseMeeting struct {
-	Base
-	CourseInstanceID uuid.UUID  `gorm:"type:uuid;not null;index" json:"course_instance_id"`
-	Weekday          int        `gorm:"not null" json:"weekday"`
-	StartTime        string     `gorm:"not null" json:"start_time"`
-	EndTime          string     `gorm:"not null" json:"end_time"`
-	Location         *string    `json:"location"`
-	ValidFrom        *time.Time `gorm:"type:date" json:"valid_from"`
-	ValidTo          *time.Time `gorm:"type:date" json:"valid_to"`
 }
 type Assignment struct {
 	Base
@@ -80,9 +71,9 @@ type AssignmentUserState struct {
 }
 type SourceItem struct {
 	Base
-	CourseInstanceID uuid.UUID `gorm:"type:uuid;not null;index"`
-	SubmittedBy      uuid.UUID `gorm:"type:uuid;not null"`
-	SourceType       string    `gorm:"not null"`
+	CourseInstanceID *uuid.UUID `gorm:"type:uuid;index"`
+	SubmittedBy      uuid.UUID  `gorm:"type:uuid;not null"`
+	SourceType       string     `gorm:"not null"`
 	RawText          *string
 	OriginalFilename *string
 	MimeType         *string
@@ -116,6 +107,7 @@ type AssignmentCandidate struct {
 	Evidence         string     `gorm:"type:jsonb;not null;default:'[]'" json:"evidence"`
 	FieldConfidence  string     `gorm:"type:jsonb;not null;default:'{}'" json:"field_confidence"`
 	UncertainFields  string     `gorm:"type:jsonb;not null;default:'[]'" json:"uncertain_fields"`
+	CourseInstanceID *uuid.UUID `gorm:"type:uuid" json:"course_instance_id"`
 	ReviewStatus     string     `gorm:"not null;default:pending" json:"review_status"`
 	ReviewedBy       *uuid.UUID `gorm:"type:uuid" json:"reviewed_by"`
 	ReviewedAt       *time.Time `json:"reviewed_at"`
@@ -130,5 +122,5 @@ type Notification struct {
 }
 
 func Models() []any {
-	return []any{&User{}, &Course{}, &CourseInstance{}, &Enrollment{}, &CourseMeeting{}, &Assignment{}, &AssignmentUserState{}, &SourceItem{}, &IngestionJob{}, &AssignmentCandidate{}, &Notification{}}
+	return []any{&User{}, &Course{}, &CourseInstance{}, &Enrollment{}, &Assignment{}, &AssignmentUserState{}, &SourceItem{}, &IngestionJob{}, &AssignmentCandidate{}, &Notification{}}
 }

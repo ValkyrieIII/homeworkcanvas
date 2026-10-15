@@ -1,11 +1,10 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from "vue";
 import { api } from "../../api";
-import { arrayOrEmpty, formatDate, type Course } from "../../types";
+import { arrayOrEmpty, formatDate, parseTermValue, termOptions, type Course } from "../../types";
 import AdminAssignmentForm from "../../components/AdminAssignmentForm.vue";
 import SelectMenu from "../../components/SelectMenu.vue";
 
-type Meeting = { id?: string; weekday: number; start_time: string; end_time: string; location: string | null };
 type Assignment = {
     id: string;
     title: string;
@@ -18,7 +17,6 @@ type Member = { id: string; display_name: string; user_id: string; status: "acti
 type Source = { id: string; submitter_name: string; original_filename: string | null; source_type: string; status: string; stage: string; error_message: string | null };
 const props = defineProps<{ courseId: string }>();
 const course = ref<Course | null>(null);
-const meetings = ref<Meeting[]>([]);
 const assignments = ref<Assignment[]>([]);
 const members = ref<Member[]>([]);
 const sources = ref<Source[]>([]);
@@ -39,30 +37,34 @@ const statusOptions = [
     { value: "active", label: "开放" },
     { value: "archived", label: "归档" },
 ];
-const weekdayOptions = Array.from({ length: 7 }, (_, index) => ({ value: index + 1, label: `周${index + 1}` }));
+// 学期是枚举，不该靠手打；选项在 load 里按全站课程算（含本课程自己的学期，改资料时不会丢）。
+const termChoices = ref<{ value: string; label: string }[]>([]);
 
 function setStatus(value: string | number) {
     if (value === "active" || value === "archived") status.value = value;
+}
+function setTerm(value: string | number) {
+    term.value = String(value);
 }
 
 async function load() {
     error.value = "";
     try {
-        const [courseResult, meetingResult, assignmentResult, memberResult, sourceResult] = await Promise.all([
+        const [courseResult, assignmentResult, memberResult, sourceResult] = await Promise.all([
             api<{ data: Course[] | null }>("/admin/course-instances"),
-            api<{ data: Meeting[] | null }>(`/course-instances/${props.courseId}/meetings`),
             api<{ data: Assignment[] | null }>(`/course-instances/${props.courseId}/assignments`),
             api<{ data: Member[] | null }>(`/course-instances/${props.courseId}/enrollments`),
             api<{ data: Source[] | null }>(`/course-instances/${props.courseId}/sources`),
         ]);
-        course.value = arrayOrEmpty(courseResult.data).find(item => item.id === props.courseId) ?? null;
-        meetings.value = arrayOrEmpty(meetingResult.data).map(item => ({ ...item, start_time: item.start_time.slice(0, 5), end_time: item.end_time.slice(0, 5) }));
+        const allCourses = arrayOrEmpty(courseResult.data);
+        course.value = allCourses.find(item => item.id === props.courseId) ?? null;
+        termChoices.value = termOptions(allCourses.map(item => ({ term_year: item.term_year, term_season: item.term_season })));
         assignments.value = arrayOrEmpty(assignmentResult.data);
         members.value = arrayOrEmpty(memberResult.data);
         sources.value = arrayOrEmpty(sourceResult.data);
         if (course.value) {
             name.value = course.value.course_name;
-            term.value = course.value.term;
+            term.value = `${course.value.term_year}-${course.value.term_season}`;
             teacher.value = course.value.teacher_name ?? "";
             status.value = course.value.status;
         }
@@ -76,24 +78,9 @@ async function saveCourse() {
     try {
         await api(`/course-instances/${props.courseId}`, {
             method: "PATCH",
-            body: JSON.stringify({ course_name: name.value.trim(), term: term.value.trim(), teacher_name: teacher.value.trim() || null, timezone: course.value.timezone, status: status.value }),
+            body: JSON.stringify({ course_name: name.value.trim(), ...parseTermValue(term.value), teacher_name: teacher.value.trim() || null, timezone: course.value.timezone, status: status.value }),
         });
         message.value = "课程资料已保存";
-        await load();
-    } catch (e: any) { error.value = e.message; }
-    finally { busy.value = false; }
-}
-function addMeeting() {
-    meetings.value.push({ weekday: 1, start_time: "08:00", end_time: "09:40", location: null });
-}
-async function saveMeetings() {
-    if (busy.value) return;
-    busy.value = true; error.value = ""; message.value = "";
-    try {
-        await api(`/course-instances/${props.courseId}/meetings`, {
-            method: "PUT", body: JSON.stringify(meetings.value.map(({ weekday, start_time, end_time, location }) => ({ weekday, start_time, end_time, location }))),
-        });
-        message.value = "课表已保存";
         await load();
     } catch (e: any) { error.value = e.message; }
     finally { busy.value = false; }
@@ -137,7 +124,15 @@ onMounted(load);
                 <p>课程名称属于课程定义；同一课程在其他学期的实例会同步显示新名称。</p>
                 <div class="form-grid">
                     <label>课程名称<input v-model="name" required /></label>
-                    <label>学期<input v-model="term" required /></label>
+                    <div class="form-field">学期
+                        <SelectMenu
+                            :model-value="term"
+                            :options="termChoices"
+                            label="学期"
+                            placeholder="请选择学期"
+                            @update:model-value="setTerm"
+                        />
+                    </div>
                     <label>任课教师<input v-model="teacher" /></label>
                     <div class="form-field">状态
                         <SelectMenu
@@ -150,26 +145,6 @@ onMounted(load);
                 </div>
                 <button :disabled="busy || !name.trim() || !term.trim()">保存课程资料</button>
             </form>
-            <section class="card admin-form">
-                <h2>上课安排</h2>
-                <p v-if="!meetings.length">暂无上课安排。</p>
-                <div v-for="(item, index) in meetings" :key="index" class="meeting-row">
-                    <div class="form-field">星期
-                        <SelectMenu
-                            :model-value="item.weekday"
-                            :options="weekdayOptions"
-                            label="星期"
-                            @update:model-value="(value) => (item.weekday = Number(value))"
-                        />
-                    </div>
-                    <label>开始<input v-model="item.start_time" type="time" required /></label>
-                    <label>结束<input v-model="item.end_time" type="time" required /></label>
-                    <label>地点<input v-model="item.location" /></label>
-                    <button class="secondary" type="button" @click="meetings.splice(index, 1)">移除</button>
-                </div>
-                <button class="secondary" type="button" @click="addMeeting">添加时间</button>
-                <button :disabled="busy" type="button" @click="saveMeetings">保存课表</button>
-            </section>
             <section class="card admin-form">
                 <h2>共享作业</h2>
                 <p>管理员核对后发布；截止时间来自老师通知，个人计划由学生自己维护。</p>

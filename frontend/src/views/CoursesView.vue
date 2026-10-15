@@ -1,14 +1,16 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
+import { useRoute } from "vue-router";
 import { api } from "../api";
 import { arrayOrEmpty, type Course } from "../types";
 import LoadState from "../components/LoadState.vue";
 
+const route = useRoute();
 const courses = ref<Course[]>([]);
 const loading = ref(false);
 const busy = ref<string | null>(null);
 const error = ref("");
-const mineOnly = ref(false);
+const mineOnly = computed(() => route.query.mine === "1");
 const visibleCourses = computed(() => mineOnly.value ? courses.value.filter(item => item.joined) : courses.value);
 
 async function load() {
@@ -46,17 +48,18 @@ onMounted(load);
         <p class="eyebrow">课程目录</p>
         <h1>选择参与的课程</h1>
         <p>加入后，课程作业和课表会出现在你的个人视图中。</p>
-        <div class="tabs" aria-label="课程筛选">
-            <button class="tab-button" :class="{ active: !mineOnly }" @click="mineOnly = false">全部课程</button>
-            <button class="tab-button" :class="{ active: mineOnly }" @click="mineOnly = true">我已加入</button>
-        </div>
+        <nav class="tabs" aria-label="课程筛选">
+            <RouterLink to="/courses" :class="{ active: !mineOnly }">全部课程</RouterLink>
+            <RouterLink :to="{ path: '/courses', query: { mine: '1' } }" :class="{ active: mineOnly }">我已加入</RouterLink>
+        </nav>
         <LoadState :loading="loading" :error="error" :empty="!visibleCourses.length" :empty-text="mineOnly ? '尚未加入课程。' : '暂无可加入课程。'" />
-        <article v-for="course in visibleCourses" :key="course.id" class="card course-link">
-            <small>{{ course.term }} · {{ course.joined ? "已加入" : "未加入" }}</small>
-            <h3>{{ course.course_name }}</h3>
-            <p>{{ course.teacher_name || "教师待确认" }}</p>
-            <div class="course-actions">
-                <RouterLink v-if="course.joined" :to="`/courses/${course.id}/assignments`">查看课程</RouterLink>
+        <article v-for="course in visibleCourses" :key="course.id" class="card card-link card-split">
+            <RouterLink class="card-split__link" :to="`/courses/${course.id}/assignments`">
+                <small>{{ course.term }} · {{ course.joined ? "已加入" : "未加入" }}</small>
+                <h3>{{ course.course_name }}</h3>
+                <p>{{ course.teacher_name || "教师待确认" }}</p>
+            </RouterLink>
+            <div class="card-split__actions">
                 <button :disabled="busy === course.id" :class="{ secondary: course.joined }" @click="setJoined(course)">
                     {{ course.joined ? "退出课程" : "加入课程" }}
                 </button>
@@ -64,7 +67,3 @@ onMounted(load);
         </article>
     </section>
 </template>
-
-<style scoped>
-.course-actions { display: flex; align-items: center; gap: 12px; }
-</style>
